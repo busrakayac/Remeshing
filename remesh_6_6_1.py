@@ -1687,7 +1687,11 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
             # We need the inverse of the dfluid mask to exclude dofs without support on the boundary.
 
             dsolid = ~dfluid # true if dof is (partially) supported by solid domain
-            res += function.replace_arguments(topo['fluid'].integral('(dtest_i ρf DuDt_i + ∇_j(dtest_i) σ_ij) dV' @ ns, degree=4), {'dtest': function.arguments_for(res)['dtest'] * dsolid})
+            #res += function.replace_arguments(topo['fluid'].integral('(dtest_i ρf DuDt_i + ∇_j(dtest_i) σ_ij) dV' @ ns, degree=4), {'dtest': function.arguments_for(res)['dtest'] * dsolid})
+            res_d_fluid_lift = function.replace_arguments(topo['fluid'].integral('(dtest_i ρf DuDt_i + ∇_j(dtest_i) σ_ij) dV' @ ns, degree=4), {'dtest': function.arguments_for(res)['dtest'] * dsolid})
+            res_d_fluid_direct = topo['fluid'].boundary['cylinder'].integral('dtest_i σ_ij n_j dS' @ ns, degree=4)
+
+            res += res_d_fluid_lift
 
 
         # Zero initial velocity
@@ -1895,6 +1899,13 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
         if has_remeshed:
             dm_predictor_before_newton = args['dm'].copy()
             u_predictor_before_newton = args['u'].copy()
+            p_predictor_before_newton = args['p'].copy()
+
+            if istep <= fluid_state['remesh_istep'] + 10:
+                args_predictor = {
+                    k: v.copy() if isinstance(v, numpy.ndarray) else v
+                    for k, v in args.items()
+                }
 
             zipped = fluid_state['dm_zipped_interface']
             dm_pred_g, ds_pred_g = function.eval([zipped.bind(ns.dm), zipped.bind(ns.d)], arguments=args)
@@ -2036,7 +2047,9 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
                     f'max difference={diff.max():.6e} m, '
                     f'RMS={numpy.sqrt(numpy.mean(diff**2)):.6e} m'
                 )
-            
+
+           
+                            
 
         except Exception:
             log.info('Newton failed. Mesh quality of current prediction / last available state:')
@@ -2054,6 +2067,81 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
                 log.info(f'particle/interface displacement max: {dcyl_mag.max():.6e} m')
 
             raise
+         if has_remeshed and istep <= fluid_state['remesh_istep'] + 10:
+
+                P_ = float((fluid.viscosity * fluid.velocity / domain.cylinder_radius) / 'Pa')
+                δp_newton = (args['p'] - p_predictor_before_newton).reshape(-1)
+            
+                if 'p' in cons:
+                    free_p = ~numpy.isfinite(cons['p']).reshape(-1)
+                    δp_newton = δp_newton[free_p]
+            
+                dp = numpy.abs(δp_newton) * P_
+            
+                log.info(
+                    f'[PRESSURE NEWTON CORRECTION] '
+                    f'RMS={numpy.sqrt(numpy.mean(dp**2)):.6e} Pa, '
+                    f'max={dp.max():.6e} Pa'
+                )
+
+            if has_remeshed and istep <= fluid_state['remesh_istep'] + 10:
+            
+                ru_expr = res.derivative('utest')
+            
+                args_u = dict(args_predictor)
+                args_u['u'] = args['u']
+            
+                args_p = dict(args_predictor)
+                args_p['p'] = args['p']
+            
+                args_up = dict(args_predictor)
+                args_up['u'] = args['u']
+                args_up['p'] = args['p']
+            
+                ru_pred = function.eval(ru_expr, arguments=args_predictor)
+                ru_u    = function.eval(ru_expr, arguments=args_u)
+                ru_p    = function.eval(ru_expr, arguments=args_p)
+                ru_up   = function.eval(ru_expr, arguments=args_up)
+                ru_full = function.eval(ru_expr, arguments=args)
+
+                free_u = ~numpy.isfinite(cons['u']).reshape(-1)
+
+                ru_pred, ru_u, ru_p, ru_up, ru_full = [
+                    numpy.asarray(r).reshape(-1)[free_u]
+                    for r in (ru_pred, ru_u, ru_p, ru_up, ru_full)]
+                
+                log.info(
+                    f'[FLUID PARTIAL NEWTON] '
+                    f'pred={numpy.linalg.norm(ru_pred):.6e}, '
+                    f'u-only={numpy.linalg.norm(ru_u):.6e}, '
+                    f'p-only={numpy.linalg.norm(ru_p):.6e}, '
+                    f'u+p={numpy.linalg.norm(ru_up):.6e}, '
+                    f'full={numpy.linalg.norm(ru_full):.6e}')
+
+                rp_expr = res.derivative('ptest')
+
+                rp_pred = function.eval(rp_expr, arguments=args_predictor)
+                rp_u    = function.eval(rp_expr, arguments=args_u)
+                rp_full = function.eval(rp_expr, arguments=args)
+                
+                rp_pred, rp_u, rp_full = [
+                    numpy.asarray(r).reshape(-1)
+                    for r in (rp_pred, rp_u, rp_full)
+                ]
+                
+                if 'p' in cons:
+                    free_p = ~numpy.isfinite(cons['p']).reshape(-1)
+                    rp_pred, rp_u, rp_full = [
+                        r[free_p]
+                        for r in (rp_pred, rp_u, rp_full)
+                    ]
+                
+                log.info(
+                    f'[INCOMPRESSIBILITY PARTIAL NEWTON] '
+                    f'pred={numpy.linalg.norm(rp_pred):.6e}, '
+                    f'u-only={numpy.linalg.norm(rp_u):.6e}, '
+                    f'full={numpy.linalg.norm(rp_full):.6e}'
+                )
 
         if has_remeshed and istep <= fluid_state['remesh_istep'] + 10:
 
@@ -2328,6 +2416,32 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
                 need_remesh = True
 
             if need_remesh:
+                if not has_remeshed:
+
+                    free_d = ~numpy.isfinite(cons['d']).reshape(-1)
+                    R_lift = numpy.asarray(function.eval(res_d_fluid_lift.derivative('dtest'), arguments=args), dtype=float).reshape(-1)[free_d]
+                    R_direct = numpy.asarray(function.eval(res_d_fluid_direct.derivative('dtest'), arguments=args), dtype=float).reshape(-1)[free_d]
+                    diff = R_direct - R_lift
+                
+                    log.info(
+                        f'[OLD COUPLING CHECK] lift: '
+                        f'L2={numpy.linalg.norm(R_lift):.6e}, '
+                        f'max={numpy.abs(R_lift).max():.6e}'
+                    )
+                
+                    log.info(
+                        f'[OLD COUPLING CHECK] direct: '
+                        f'L2={numpy.linalg.norm(R_direct):.6e}, '
+                        f'max={numpy.abs(R_direct).max():.6e}'
+                    )
+                
+                    log.info(
+                        f'[OLD COUPLING CHECK] direct-lift: '
+                        f'L2={numpy.linalg.norm(diff):.6e}, '
+                        f'max={numpy.abs(diff).max():.6e}, '
+                        f'rel={numpy.linalg.norm(diff) /max(numpy.linalg.norm(R_lift), 1e-30):.6e}'
+                    )
+                    
                 remesh_count += 1
 
                 # Capture old-mesh state for diagnostics BEFORE remeshing.
