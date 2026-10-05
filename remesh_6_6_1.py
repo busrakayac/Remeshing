@@ -1894,6 +1894,7 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
         # ------------------------------------------------------------
         if has_remeshed:
             dm_predictor_before_newton = args['dm'].copy()
+            u_predictor_before_newton = args['u'].copy()
 
             zipped = fluid_state['dm_zipped_interface']
             dm_pred_g, ds_pred_g = function.eval([zipped.bind(ns.dm), zipped.bind(ns.d)], arguments=args)
@@ -2039,7 +2040,7 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
 
         except Exception:
             log.info('Newton failed. Mesh quality of current prediction / last available state:')
-
+            
             if fluid:
                 Jf = function.eval(Jfluid_bz, arguments=args)
                 log.info(f'J fluid min/max: {Jf.min():.6e}, {Jf.max():.6e}')
@@ -2053,6 +2054,21 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
                 log.info(f'particle/interface displacement max: {dcyl_mag.max():.6e} m')
 
             raise
+
+        if has_remeshed and istep <= fluid_state['remesh_istep'] + 10:
+
+            dt_ = float(dynamic.timestep / 's')
+            U_  = float(fluid.velocity / 'm/s')
+        
+            δu_newton = args['u'] - u_predictor_before_newton
+        
+            du = numpy.linalg.norm(δu_newton, axis=1) * U_
+            da_rel = du / (dynamic.gamma * dt_)
+        
+            log.info(
+                f'[UREL NEWTON CORRECTION] '
+                f'max|u_solved-u_pred|={du.max():.6e} m/s, '
+                f'implied |Δa_rel|={da_rel.max():.6e} m/s2')
 
         if fluid:
             Jf_check = function.eval(Jfluid_bz, arguments=args)
