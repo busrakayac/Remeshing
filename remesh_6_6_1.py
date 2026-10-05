@@ -750,7 +750,29 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     a0dt_new = _project_vector(new_a0dt_urel_x, new_a0dt_urel_y, u_scale)
     A_rel = _project_vector(new_arel_x * dt, new_arel_y * dt, u_scale)
     u0_new = urel_new_dofs - gamma*A_rel - (1-gamma)*a0dt_new
+    urel_direct = _project_vector(new_urel_x, new_urel_y, u_scale)
+    u0_direct   = _project_vector(new_u0_x, new_u0_y, u_scale)
+    
+    # What acceleration does the directly transferred history imply?
+    Arel_direct_hist = a0dt_new + (urel_direct - u0_direct - a0dt_new) / gamma
+    # What acceleration would the new urel imply if we kept the transferred u0?
+    Arel_keep_u0 = a0dt_new + (urel_new_dofs - u0_direct - a0dt_new) / gamma
+    du_rel = numpy.linalg.norm(
+    (urel_new_dofs - urel_direct) * u_scale, axis=1)
 
+    du0 = numpy.linalg.norm((u0_new - u0_direct) * u_scale, axis=1)
+    da_direct = numpy.linalg.norm((Arel_direct_hist - A_rel) * u_scale / dt, axis=1)
+    da_keep_u0 = numpy.linalg.norm((Arel_keep_u0 - A_rel) * u_scale / dt, axis=1)
+    
+    log.info(
+        f'[UREL RESTART] '
+        f'max|urel_new-urel_direct|={du_rel.max():.6e} m/s, '
+        f'max|u0_new-u0_direct|={du0.max():.6e} m/s')
+    log.info(
+        f'[UREL HISTORY] '
+        f'direct-history accel error={da_direct.max():.6e} m/s2, '
+        f'keep-u0 accel change={da_keep_u0.max():.6e} m/s2')
+    
     A_mesh = _project_mesh_state(new_am_x * dt**2, new_am_y * dt**2, new_ns.a * dynamic.timestep**2)
 
     for fac in (1., .5, .25):
