@@ -2067,7 +2067,7 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
                 log.info(f'particle/interface displacement max: {dcyl_mag.max():.6e} m')
 
             raise
-         if has_remeshed and istep <= fluid_state['remesh_istep'] + 10:
+            if has_remeshed and istep <= fluid_state['remesh_istep'] + 10:
 
                 P_ = float((fluid.viscosity * fluid.velocity / domain.cylinder_radius) / 'Pa')
                 δp_newton = (args['p'] - p_predictor_before_newton).reshape(-1)
@@ -2083,7 +2083,7 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
                     f'RMS={numpy.sqrt(numpy.mean(dp**2)):.6e} Pa, '
                     f'max={dp.max():.6e} Pa'
                 )
-
+                
             if has_remeshed and istep <= fluid_state['remesh_istep'] + 10:
             
                 ru_expr = res.derivative('utest')
