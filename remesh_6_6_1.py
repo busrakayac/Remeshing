@@ -1128,6 +1128,40 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
         f'||Ru|| transfer={numpy.linalg.norm(ru_transfer):.6e}, '
         f'projected={numpy.linalg.norm(ru_projected):.6e}'
     )
+    # ------------------------------------------------------------------
+    # DIAGNOSTIC: effect of projection on each momentum term
+    # ------------------------------------------------------------------
+    
+    racc = new_topo['fluid'].integral('utest_i ρf (am_i + arel_i) dV' @ ns_f, degree=4)
+    rconv = new_topo['fluid'].integral('utest_i ρf ∇_j(u_i) urel_j dV' @ ns_f, degree=4)
+    rvisc = new_topo['fluid'].integral('∇_j(utest_i) μf (∇_j(u_i) + ∇_i(u_j)) dV' @ ns_f, degree=4)
+    rpres = new_topo['fluid'].integral('-∇_j(utest_i) p δ_ij dV' @ ns_f, degree=4)
+    
+    args_tr = dict(new_args)
+    
+    args_pr = dict(new_args)
+    args_pr['u']  = urel_proj_dofs
+    args_pr['u0'] = u0_proj
+    
+    free_u = ~numpy.isfinite(new_cons['u']).reshape(-1)
+    
+    for name, expr in (
+        ('acc',  racc),
+        ('conv', rconv),
+        ('visc', rvisc),
+        ('pres', rpres),
+    ):
+    
+        r_tr = numpy.asarray(function.eval(expr.derivative('utest'), arguments=args_tr)).reshape(-1)[free_u]
+    
+        r_pr = numpy.asarray(function.eval(expr.derivative('utest'), arguments=args_pr)).reshape(-1)[free_u]
+    
+        log.info(
+            f'[PROJECTION MOMENTUM] {name}: '
+            f'transfer={numpy.linalg.norm(r_tr):.6e}, '
+            f'projected={numpy.linalg.norm(r_pr):.6e}, '
+            f'delta={numpy.linalg.norm(r_pr-r_tr):.6e}'
+        )
 
     # Activate divergence-free restart
     new_args['u']  = urel_proj_dofs
