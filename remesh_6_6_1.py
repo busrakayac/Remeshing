@@ -746,10 +746,53 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     ramp_now = .5 - .5*numpy.cos(numpy.pi*min(current_t_s / float(dynamic.init/'s'), 1.))
     umask = numpy.isfinite(new_ucons)
     urel_new_dofs[umask] = ramp_now * new_ucons[umask]
+    # ------------------------------------------------------------------
+    # DIAGNOSTIC: divergence-free projection of transferred u_rel
+    # ------------------------------------------------------------------
+    ns_proj = Namespace()
+
+    ns_proj.x = new_geom
+    ns_proj.define_for('x', gradient='∇', jacobians=('dV',))
+
+    # Dimensionless P2 velocity correction field
+    ns_proj.uproj = new_topo['fluid'].field(
+        'uproj', btype='std', degree=2, shape=(2,))
+    ns_proj.uprojtest = function.replace_arguments(
+        ns_proj.uproj, 'uproj:uprojtest')
+
+    # Dimensionless P1 Lagrange multiplier
+    ns_proj.qproj = new_topo['fluid'].field(
+        'qproj', btype='std', degree=1)
+    ns_proj.qprojtest = function.replace_arguments(
+        ns_proj.qproj, 'qproj:qprojtest')
+
+    # Transferred relative velocity, expressed as a field
+    ns_proj.utarget = (function.replace_arguments(new_ns.urel, [('u', 'utarget')]) / fluid.velocity)
+
+    # Fresh-mesh velocity, dimensionless
+    ns_proj.vm = (function.replace_arguments(new_ns.dm, [('dm', 'Vproj')]) / dynamic.timestep / fluid.velocity)
+
+    # Minimum-change projection: min ||u_proj-u_transfer||² subject to: div(v_m + u_proj) = 0
+    res_proj = (new_topo['fluid'].integral('uprojtest_i (uproj_i - utarget_i) dV' @ ns_proj, degree=4) / domain.cylinder_radius**2)
+    res_proj += (new_topo['fluid'].integral('qproj ∇_i(uprojtest_i) dV' @ ns_proj, degree=4) / domain.cylinder_radius)
+    res_proj += (new_topo['fluid'].integral('qprojtest ∇_k(vm_k + uproj_k) dV' @ ns_proj, degree=4) / domain.cylinder_radius)
+
+    # Same Dirichlet values as the transferred field
+    uproj_cons = numpy.full_like(new_ucons, numpy.nan)
+    uproj_cons[umask] = urel_new_dofs[umask]
+
+    proj_cons = {'uproj': uproj_cons}
+    proj_args = {'uproj':  urel_new_dofs.copy(), 'utarget': urel_new_dofs.copy(), 'Vproj':   V_mesh.copy(), 'qproj': numpy.zeros(function.arguments_for(res_proj)['qproj'].shape)}
+
+    proj_solution = System(res_proj, trial=['uproj', 'qproj'], test=['uprojtest', 'qprojtest']).solve(constrain=proj_cons, arguments=proj_args, tol=1e-12)
+    urel_proj_dofs = proj_solution['uproj']
 
     a0dt_new = _project_vector(new_a0dt_urel_x, new_a0dt_urel_y, u_scale)
     A_rel = _project_vector(new_arel_x * dt, new_arel_y * dt, u_scale)
     u0_new = urel_new_dofs - gamma*A_rel - (1-gamma)*a0dt_new
+    # Hypothetical Newmark history for the projected restart.
+    # Keeps the transferred current a_rel unchanged.
+    u0_proj = (urel_proj_dofs - gamma*A_rel - (1-gamma)*a0dt_new)
     urel_direct = _project_vector(new_urel_x, new_urel_y, u_scale)
     u0_direct   = _project_vector(new_u0_x, new_u0_y, u_scale)
     
@@ -1033,6 +1076,58 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
 
     # Interface Lagrange multiplier
     new_args['lam'] = numpy.zeros(function.arguments_for(new_res)['lam'].shape)
+    # ------------------------------------------------------------------
+    # DIAGNOSTIC: would the projected restart improve Rp and Ru?
+    # ------------------------------------------------------------------
+
+    # Size of the projection correction in physical velocity
+    du_proj_g = function.eval(new_dof_sample.bind(new_ns.urel), arguments={'u': urel_proj_dofs - urel_new_dofs})
+
+    du_proj = numpy.linalg.norm(numpy.asarray(du_proj_g / 'm/s'), axis=-1)
+
+    # Hypothetical projected restart
+    projected_args = dict(new_args)
+    projected_args['u']  = urel_proj_dofs
+    projected_args['u0'] = u0_proj
+
+    # Momentum and incompressibility residuals
+    ru_expr = new_res.derivative('utest')
+    rp_expr = new_res.derivative('ptest')
+
+    ru_transfer = numpy.asarray(function.eval(ru_expr, arguments=new_args)).reshape(-1)
+    rp_transfer = numpy.asarray(function.eval(rp_expr, arguments=new_args)).reshape(-1)
+    ru_projected = numpy.asarray(function.eval(ru_expr, arguments=projected_args)).reshape(-1)
+    rp_projected = numpy.asarray(function.eval(rp_expr, arguments=projected_args)).reshape(-1)
+
+    # Keep only unconstrained equations
+    free_u = ~numpy.isfinite(new_cons['u']).reshape(-1)
+
+    ru_transfer  = ru_transfer[free_u]
+    ru_projected = ru_projected[free_u]
+
+    if 'p' in new_cons:
+        free_p = ~numpy.isfinite(new_cons['p']).reshape(-1)
+        rp_transfer  = rp_transfer[free_p]
+        rp_projected = rp_projected[free_p]
+
+    log.info(
+        f'[PROJECTED RESTART] '
+        f'|u_proj-u_transfer| '
+        f'max={du_proj.max():.6e} m/s, '
+        f'RMS={numpy.sqrt(numpy.mean(du_proj**2)):.6e} m/s'
+    )
+
+    log.info(
+        f'[PROJECTED RESTART] '
+        f'||Rp|| transfer={numpy.linalg.norm(rp_transfer):.6e}, '
+        f'projected={numpy.linalg.norm(rp_projected):.6e}'
+    )
+
+    log.info(
+        f'[PROJECTED RESTART] '
+        f'||Ru|| transfer={numpy.linalg.norm(ru_transfer):.6e}, '
+        f'projected={numpy.linalg.norm(ru_projected):.6e}'
+    )
 
     # ------------------------------------------------------------------
     # CHECK: is physical fluid velocity preserved by remeshing?
