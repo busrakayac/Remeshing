@@ -1129,6 +1129,10 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
         f'projected={numpy.linalg.norm(ru_projected):.6e}'
     )
 
+    # Activate divergence-free restart
+    new_args['u']  = urel_proj_dofs
+    new_args['u0'] = u0_proj
+
     # ------------------------------------------------------------------
     # CHECK: is physical fluid velocity preserved by remeshing?
     #
