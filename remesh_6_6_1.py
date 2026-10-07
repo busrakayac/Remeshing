@@ -606,6 +606,8 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
 
     transfer_tol_m = float(domain.cylinder_radius / 'm') * 1e-4
     transfer_via_locate = False
+
+    new_graduf = None
     try:
         # locate must be performed in the OLD mesh's *physical* (deformed ALE) coordinates, because new_dof_x_m are physical positions.
         # x_field is exactly that (= X_old + d_m_old); strip its SI unit and supply args so the displacement part evaluates.
@@ -622,6 +624,14 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
                 old_located.bind(a0dt2_expr),
                 old_located.bind(u0_expr),
                 old_located.bind(a0dt_urel_expr)], arguments=args)
+        ns_old_grad = Namespace()
+        ns_old_grad.x = x_field
+        ns_old_grad.define_for('x', gradient='∇')
+        ns_old_grad.uf = v_field + urel_field
+        
+        t_graduf = function.eval(old_located.bind('∇_j(uf_i)' @ ns_old_grad), arguments=args)
+        
+        new_graduf = numpy.asarray(t_graduf / '1/s', dtype=float)
 
 
         new_uf_x, new_uf_y = numpy.asarray(t_uf / 'm/s', dtype=float).T
@@ -692,6 +702,32 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
 
         return System(sqr, trial='fproj').solve(constrain={}, arguments={})['fproj']
 
+    def _project_velocity_h1(target_x, target_y, target_grad, scale):
+
+        ns_p = Namespace()
+    
+        # Dimensionless physical coordinates x/R
+        ns_p.x = new_geom / domain.cylinder_radius
+        ns_p.define_for('x', gradient='∇')
+    
+        ns_p.fproj = new_topo['fluid'].field(
+            'fproj', btype='std', degree=2, shape=(2,)
+        )
+    
+        ns_p.ftarget = new_dof_sample.asfunction(numpy.stack([target_x / scale, target_y / scale], axis=1).astype(float))
+    
+        # grad(u/U) with respect to x/R = R/U * grad(u)
+        ns_p.gtarget = new_dof_sample.asfunction((target_grad * R_scale / u_scale).astype(float))
+    
+        ns_p.wH1 = 0.25**2
+        sqr = new_dof_sample.integral(
+            ('(fproj_i-ftarget_i) (fproj_i-ftarget_i)'
+                ' + wH1 '
+                '(∇_j(fproj_i)-gtarget_ij) '
+                '(∇_j(fproj_i)-gtarget_ij)') @ ns_p)
+    
+        return System(sqr, trial='fproj').solve(constrain={}, arguments={})['fproj']
+
     # Synchronize current mesh state at remeshing
 
     def _project_mesh_state(tx, ty, interface_target):
@@ -737,7 +773,10 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
         return System(res_h, trial='h', test='htest').solve(
             constrain=hcons, arguments={'h': numpy.nan_to_num(hcons['h'], nan=0.)}, tol=1e-12)['h']
     
-    uf_proj_dofs = _project_vector(new_uf_x, new_uf_y, u_scale)
+    if new_graduf is not None:
+        uf_proj_dofs = _project_velocity_h1(new_uf_x, new_uf_y, new_graduf, u_scale)
+    else:
+        uf_proj_dofs = _project_vector(new_uf_x, new_uf_y, u_scale)
 
     V_mesh = _extend_mesh_state(new_ns.v * dynamic.timestep)
 
