@@ -776,7 +776,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     res_proj = (new_topo['fluid'].integral('uprojtest_i (uproj_i - utarget_i) dV' @ ns_proj, degree=4) / domain.cylinder_radius**2)
 
     # H1 regularization: preserve transferred velocity gradients
-    h1_weight = 0.1**2   # ell = 0.1 R
+    h1_weight = 0.25**2   # ell = 0.1 R
     
     res_proj += h1_weight * new_topo['fluid'].integral('∇_j(uprojtest_i) (∇_j(uproj_i) - ∇_j(utarget_i)) dV' @ ns_proj, degree=4)
     res_proj += (new_topo['fluid'].integral('qproj ∇_i(uprojtest_i) dV' @ ns_proj, degree=4) / domain.cylinder_radius)
