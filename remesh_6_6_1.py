@@ -720,7 +720,10 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
         ns_p.gtarget = new_dof_sample.asfunction((target_grad * R_scale / u_scale).astype(float))
     
         ns_p.wH1 = 0.25**2
-        sqr = new_dof_sample.integral(('(fproj_i - ftarget_i) (fproj_i - ftarget_i) + wH1 (∇_j(fproj_i) - gtarget_ij) (∇_j(fproj_i) - gtarget_ij)') @ ns_p)
+        sqr = new_dof_sample.integral(
+            ('(fproj_i - ftarget_i) (fproj_i - ftarget_i) + '
+             'wH1 (∇_j(fproj_i) - gtarget_ij) (∇_j(fproj_i) - gtarget_ij)') @ ns_p
+        )
     
         return System(sqr, trial='fproj').solve(constrain={}, arguments={})['fproj']
 
