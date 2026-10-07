@@ -1081,6 +1081,78 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
 
     # Interface Lagrange multiplier
     new_args['lam'] = numpy.zeros(function.arguments_for(new_res)['lam'].shape)
+
+    # ------------------------------------------------------------------
+    # DIAGNOSTIC: physical momentum terms before vs after transfer
+    # ------------------------------------------------------------------
+    
+    if transfer_via_locate:
+    
+        ns_old_mom = Namespace()
+        ns_old_mom.x = x_field
+        ns_old_mom.define_for('x', gradient='∇')
+        ns_old_mom.vm = v_field
+        ns_old_mom.am = a_field
+        ns_old_mom.urel = urel_field
+        ns_old_mom.arel = arel_field
+        ns_old_mom.p = p_field
+        ns_old_mom.μf = fluid.viscosity
+        ns_old_mom.u_i = 'vm_i + urel_i'
+    
+        old_acc_g, old_conv_g, old_tau_g, old_p_g = function.eval([
+            old_located.bind('am_i + arel_i' @ ns_old_mom),
+            old_located.bind('∇_j(u_i) urel_j' @ ns_old_mom),
+            old_located.bind('μf (∇_j(u_i) + ∇_i(u_j))' @ ns_old_mom),
+            old_located.bind(ns_old_mom.p),
+        ], arguments=args)
+    
+        new_acc_g, new_conv_g, new_tau_g, new_p_g = function.eval([
+            new_dof_sample.bind('am_i + arel_i' @ ns_f),
+            new_dof_sample.bind('∇_j(u_i) urel_j' @ ns_f),
+            new_dof_sample.bind('μf (∇_j(u_i) + ∇_i(u_j))' @ ns_f),
+            new_dof_sample.bind(ns_f.p),
+        ], arguments=new_args)
+    
+        old_acc  = numpy.asarray(old_acc_g  / 'm/s2', dtype=float)
+        new_acc  = numpy.asarray(new_acc_g  / 'm/s2', dtype=float)
+    
+        old_conv = numpy.asarray(old_conv_g / 'm/s2', dtype=float)
+        new_conv = numpy.asarray(new_conv_g / 'm/s2', dtype=float)
+    
+        old_tau  = numpy.asarray(old_tau_g / 'Pa', dtype=float)
+        new_tau  = numpy.asarray(new_tau_g / 'Pa', dtype=float)
+    
+        old_p    = numpy.asarray(old_p_g / 'Pa', dtype=float)
+        new_p    = numpy.asarray(new_p_g / 'Pa', dtype=float)
+    
+        def _compare_transfer(label, old_val, new_val, unit):
+            old_flat = old_val.reshape(old_val.shape[0], -1)
+            new_flat = new_val.reshape(new_val.shape[0], -1)
+    
+            err = numpy.linalg.norm(new_flat - old_flat, axis=1)
+            ref = numpy.linalg.norm(old_flat, axis=1)
+    
+            rms = numpy.sqrt(numpy.mean(err**2))
+            ref_rms = numpy.sqrt(numpy.mean(ref**2))
+    
+            log.info(
+                f'[MOMENTUM TRANSFER] {label}: '
+                f'max={err.max():.6e} {unit}, '
+                f'RMS={rms:.6e} {unit}, '
+                f'relRMS={rms/max(ref_rms,1e-30):.6e}'
+            )
+    
+        _compare_transfer('acc', old_acc, new_acc, 'm/s2')
+        _compare_transfer('conv', old_conv, new_conv, 'm/s2')
+        _compare_transfer('DuDt', old_acc + old_conv, new_acc + new_conv, 'm/s2')
+        _compare_transfer('viscous stress', old_tau, new_tau, 'Pa')
+        _compare_transfer('pressure', old_p, new_p, 'Pa')
+    
+        I = numpy.eye(2)
+        old_sigma = old_tau - old_p[:, None, None] * I
+        new_sigma = new_tau - new_p[:, None, None] * I
+    
+        _compare_transfer('total stress', old_sigma, new_sigma, 'Pa')
     # ------------------------------------------------------------------
     # DIAGNOSTIC: would the projected restart improve Rp and Ru?
     # ------------------------------------------------------------------
