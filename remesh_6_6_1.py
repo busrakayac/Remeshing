@@ -774,6 +774,11 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
 
     # Minimum-change projection: min ||u_proj-u_transfer||² subject to: div(v_m + u_proj) = 0
     res_proj = (new_topo['fluid'].integral('uprojtest_i (uproj_i - utarget_i) dV' @ ns_proj, degree=4) / domain.cylinder_radius**2)
+
+    # H1 regularization: preserve transferred velocity gradients
+    h1_weight = 0.1**2   # ell = 0.1 R
+    
+    res_proj += h1_weight * new_topo['fluid'].integral('∇_j(uprojtest_i) (∇_j(uproj_i) - ∇_j(utarget_i)) dV' @ ns_proj, degree=4)
     res_proj += (new_topo['fluid'].integral('qproj ∇_i(uprojtest_i) dV' @ ns_proj, degree=4) / domain.cylinder_radius)
     res_proj += (new_topo['fluid'].integral('qprojtest ∇_k(vm_k + uproj_k) dV' @ ns_proj, degree=4) / domain.cylinder_radius)
 
