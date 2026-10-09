@@ -833,8 +833,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     uproj_cons[umask] = urel_new_dofs[umask]
 
     proj_cons = {'uproj': uproj_cons}
-    proj_args = {'uproj':  urel_new_dofs.copy(), 'utarget': urel_new_dofs.copy(), 'Vproj':   V_mesh.copy(), 'qproj': numpy.zeros(function.arguments_for(res_proj)['qproj'].shape)}
-
+    proj_args = {'uproj': urel_new_dofs.copy(), 'Vproj': V_mesh.copy(), 'qproj': numpy.zeros(function.arguments_for(res_proj)['qproj'].shape)}
     proj_solution = System(res_proj, trial=['uproj', 'qproj'], test=['uprojtest', 'qprojtest']).solve(constrain=proj_cons, arguments=proj_args, tol=1e-12)
     urel_proj_dofs = proj_solution['uproj']
 
