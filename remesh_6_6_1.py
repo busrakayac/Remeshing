@@ -772,14 +772,10 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
         return System(res_h, trial='h', test='htest').solve(
             constrain=hcons, arguments={'h': numpy.nan_to_num(hcons['h'], nan=0.)}, tol=1e-12)['h']
     
-    if new_graduf is not None:
-        uf_proj_dofs = _project_velocity_h1(new_uf_x, new_uf_y, new_graduf, u_scale)
-    else:
-        uf_proj_dofs = _project_vector(new_uf_x, new_uf_y, u_scale)
+    uf_proj_dofs = _project_vector(new_uf_x, new_uf_y, u_scale)
 
-    #V_mesh = _extend_mesh_state(new_ns.v * dynamic.timestep)
-    V_mesh = _project_mesh_state(new_vm_x * dt, new_vm_y * dt, new_ns.v * dynamic.timestep)
-    
+    V_mesh = _extend_mesh_state(new_ns.v * dynamic.timestep)
+        
     urel_new_dofs = uf_proj_dofs - V_mesh * R_scale / (dt * u_scale)
 
     ramp_now = .5 - .5*numpy.cos(numpy.pi*min(current_t_s / float(dynamic.init/'s'), 1.))
@@ -788,36 +784,47 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     # ------------------------------------------------------------------
     # DIAGNOSTIC: divergence-free projection of transferred u_rel
     # ------------------------------------------------------------------
-    ns_proj = Namespace()
-
-    ns_proj.x = new_geom
-    ns_proj.define_for('x', gradient='∇', jacobians=('dV',))
-
-    # Dimensionless P2 velocity correction field
-    ns_proj.uproj = new_topo['fluid'].field(
-        'uproj', btype='std', degree=2, shape=(2,))
-    ns_proj.uprojtest = function.replace_arguments(
-        ns_proj.uproj, 'uproj:uprojtest')
-
-    # Dimensionless P1 Lagrange multiplier
-    ns_proj.qproj = new_topo['fluid'].field(
-        'qproj', btype='std', degree=1)
-    ns_proj.qprojtest = function.replace_arguments(
-        ns_proj.qproj, 'qproj:qprojtest')
-
-    # Transferred relative velocity, expressed as a field
-    ns_proj.utarget = (function.replace_arguments(new_ns.urel, [('u', 'utarget')]) / fluid.velocity)
-
-    # Fresh-mesh velocity, dimensionless
-    ns_proj.vm = (function.replace_arguments(new_ns.dm, [('dm', 'Vproj')]) / dynamic.timestep / fluid.velocity)
-
-    # Minimum-change projection: min ||u_proj-u_transfer||² subject to: div(v_m + u_proj) = 0
-    res_proj = (new_topo['fluid'].integral('uprojtest_i (uproj_i - utarget_i) dV' @ ns_proj, degree=4) / domain.cylinder_radius**2)
-
-    # H1 regularization: preserve transferred velocity gradients
-    h1_weight = 0.25**2   # ell = 0.1 R
+    # -------------------------------------------------------------------------
+    # Combined H1 + divergence-free physical-velocity projection
+    # -------------------------------------------------------------------------
     
-    res_proj += h1_weight * new_topo['fluid'].integral('∇_j(uprojtest_i) (∇_j(uproj_i) - ∇_j(utarget_i)) dV' @ ns_proj, degree=4)
+    ns_proj = Namespace()
+    
+    # Dimensionless coordinates
+    ns_proj.x = new_geom / domain.cylinder_radius
+    ns_proj.define_for('x', gradient='∇')
+    
+    # Unknown relative velocity
+    ns_proj.uproj = new_topo['fluid'].field('uproj', btype='std', degree=2, shape=(2,))
+    ns_proj.uprojtest = function.replace_arguments(ns_proj.uproj, 'uproj:uprojtest')
+    
+    # Lagrange multiplier for incompressibility
+    ns_proj.qproj = new_topo['fluid'].field('qproj', btype='std', degree=1)
+    ns_proj.qprojtest = function.replace_arguments(ns_proj.qproj, 'qproj:qprojtest')
+    
+    # Fresh-mesh velocity
+    ns_proj.vm = (function.replace_arguments(new_ns.dm, [('dm', 'Vproj')]) / dynamic.timestep / fluid.velocity)
+    
+    # Physical velocity = mesh velocity + relative velocity
+    ns_proj.uf_i = 'vm_i + uproj_i'
+    
+    # Old physical velocity evaluated at the new-mesh Gauss points
+    ns_proj.utarget = new_dof_sample.asfunction(numpy.stack([new_uf_x / u_scale, new_uf_y / u_scale], axis=1).astype(float))
+    
+    # Old physical velocity gradient
+    ns_proj.gtarget = new_dof_sample.asfunction((new_graduf * R_scale / u_scale).astype(float))
+    
+    # H1 weight
+    ns_proj.wH1 = 0.5**2
+    
+    res_proj = new_dof_sample.integral((
+            'uprojtest_i (uf_i - utarget_i) '
+            '+ wH1 ∇_j(uprojtest_i) '
+            '(∇_j(uf_i) - gtarget_ij) '
+            '+ qproj ∇_i(uprojtest_i) '
+            '+ qprojtest ∇_i(uf_i)'
+        ) @ ns_proj
+    )
     res_proj += (new_topo['fluid'].integral('qproj ∇_i(uprojtest_i) dV' @ ns_proj, degree=4) / domain.cylinder_radius)
     res_proj += (new_topo['fluid'].integral('qprojtest ∇_k(vm_k + uproj_k) dV' @ ns_proj, degree=4) / domain.cylinder_radius)
 
