@@ -792,7 +792,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     
     # Dimensionless coordinates
     ns_proj.x = new_geom / domain.cylinder_radius
-    ns_proj.define_for('x', gradient='∇')
+    ns_proj.define_for('x', gradient='∇', jacobians=('dV',))
     
     # Unknown relative velocity
     ns_proj.uproj = new_topo['fluid'].field('uproj', btype='std', degree=2, shape=(2,))
