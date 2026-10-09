@@ -777,8 +777,9 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     else:
         uf_proj_dofs = _project_vector(new_uf_x, new_uf_y, u_scale)
 
-    V_mesh = _extend_mesh_state(new_ns.v * dynamic.timestep)
-
+    #V_mesh = _extend_mesh_state(new_ns.v * dynamic.timestep)
+    V_mesh = _project_mesh_state(new_vm_x * dt, new_vm_y * dt, new_ns.v * dynamic.timestep)
+    
     urel_new_dofs = uf_proj_dofs - V_mesh * R_scale / (dt * u_scale)
 
     ramp_now = .5 - .5*numpy.cos(numpy.pi*min(current_t_s / float(dynamic.init/'s'), 1.))
