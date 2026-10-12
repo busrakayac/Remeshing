@@ -818,15 +818,13 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     ns_proj.wH1 = 0.5**2
     
     res_proj = new_dof_sample.integral((
-            'uprojtest_i (uf_i - utarget_i) '
-            '+ wH1 ∇_j(uprojtest_i) '
-            '(∇_j(uf_i) - gtarget_ij) '
-            '+ qproj ∇_i(uprojtest_i) '
-            '+ qprojtest ∇_i(uf_i)'
-        ) @ ns_proj
-    )
-    res_proj += (new_topo['fluid'].integral('qproj ∇_i(uprojtest_i) dV' @ ns_proj, degree=4) / domain.cylinder_radius)
-    res_proj += (new_topo['fluid'].integral('qprojtest ∇_k(vm_k + uproj_k) dV' @ ns_proj, degree=4) / domain.cylinder_radius)
+        'uprojtest_i (uf_i - utarget_i) '
+        '+ wH1 ∇_j(uprojtest_i) '
+        '(∇_j(uf_i) - gtarget_ij) '
+        '+ qproj ∇_i(uprojtest_i) '
+        '+ qprojtest ∇_i(uf_i)'
+    ) @ ns_proj)
+        
 
     # Same Dirichlet values as the transferred field
     uproj_cons = numpy.full_like(new_ucons, numpy.nan)
