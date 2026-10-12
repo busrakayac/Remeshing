@@ -958,7 +958,6 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
             f'max|A_geo|={Ageo_val.max():.6e} m/s2, '
             f'max|A_fd-(A_acc+A_geo)|={dA_decomp.max():.6e} m/s2')
     
-    A_mesh = A_fd.copy()
     dm_n_dofs = numpy.zeros_like(V_mesh)
 
     a0dt2_solid = function.replace_arguments(new_ns.d, [('d', 'a0δt2')])
@@ -2152,6 +2151,8 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
         # ------------------------------------------------------------
         if has_remeshed:
             dm_predictor_before_newton = args['dm'].copy()
+            d_predictor_before_newton  = args['d'].copy()
+
             u_predictor_before_newton = args['u'].copy()
             p_predictor_before_newton = args['p'].copy()
 
@@ -2436,28 +2437,40 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
             # Smooth continuation used as Newton initial guess
             Δdm_pred = Vn_before_solve + 0.5 * An_before_solve
 
-            # Correction imposed by the first coupled solve
+            # Correction imposed by the coupled Newton solve
             δdm_newton = args['dm'] - dm_predictor_before_newton
-
+            δd_newton  = args['d']  - d_predictor_before_newton
+            
+            # Mesh predictor / correction
             max_solve = numpy.linalg.norm(Δdm_solve, axis=1).max() * R_m
             max_pred  = numpy.linalg.norm(Δdm_pred, axis=1).max() * R_m
             max_corr  = numpy.linalg.norm(δdm_newton, axis=1).max() * R_m
-
+            
+            # Solid correction
+            max_corr_s = numpy.linalg.norm(δd_newton, axis=1).max() * R_m
+            
             # Newmark: δa = δd / (beta dt²)
-            max_da_from_corr = max_corr / (dynamic.beta * dt_**2)
-
+            max_da_from_corr = max_corr   / (dynamic.beta * dt_**2)
+            max_da_s         = max_corr_s / (dynamic.beta * dt_**2)
+            
             log.info(
                 f'[MESH NEWTON CORRECTION] '
                 f'max|Δdm|={max_solve:.6e} m, '
                 f'max|predictor increment|={max_pred:.6e} m'
             )
-
+            
             log.info(
                 f'[MESH NEWTON CORRECTION] '
                 f'max|dm_solved-dm_pred|={max_corr:.6e} m, '
                 f'implied |Δa_m|={max_da_from_corr:.6e} m/s2'
             )
-
+            
+            log.info(
+                f'[SOLID NEWTON CORRECTION] '
+                f'max|d_solved-d_pred|={max_corr_s:.6e} m, '
+                f'implied |Δa_s|={max_da_s:.6e} m/s2'
+            )
+            
             sample = fluid_state['transfer_sample']
             zipped = fluid_state['dm_zipped_interface']
 
