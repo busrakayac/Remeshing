@@ -2145,7 +2145,7 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
                         f'[FRESH MESH PREDICTOR] '
                         f'max|dm_pred-dm_eq|={ddm_eq.max():.6e} m')
             
-
+        d_predictor_before_newton = args['d'].copy()
         # ------------------------------------------------------------
         # Solve nonlinear system
         # ------------------------------------------------------------
@@ -2425,6 +2425,25 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
             if not numpy.all(numpy.isfinite(Js_check)) or Js_check.min() <= 0:
                 raise RuntimeError(f'Invalid solid state after Newton: Js_min={Js_check.min():.6e}')
 
+        # ------------------------------------------------------------
+        # Solid Newton correction - every timestep
+        # ------------------------------------------------------------
+        if solid and dynamic:
+        
+            R_m = float(domain.cylinder_radius / 'm')
+            dt_ = float(dynamic.timestep / 's')
+        
+            δd_newton = args['d'] - d_predictor_before_newton
+        
+            max_corr_s = numpy.linalg.norm(δd_newton, axis=1).max() * R_m
+            max_da_s = max_corr_s / (dynamic.beta * dt_**2)
+        
+            log.info(
+                f'[SOLID NEWTON CORRECTION] '
+                f'max|d_solved-d_pred|={max_corr_s:.6e} m, '
+                f'implied |Δa_s|={max_da_s:.6e} m/s2'
+            )
+
         # Put the new MESH STEP CONSISTENCY diagnostic here.
         if has_remeshed and 'dm' in args:
 
@@ -2439,20 +2458,16 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
 
             # Correction imposed by the coupled Newton solve
             δdm_newton = args['dm'] - dm_predictor_before_newton
-            δd_newton  = args['d']  - d_predictor_before_newton
-            
+                        
             # Mesh predictor / correction
             max_solve = numpy.linalg.norm(Δdm_solve, axis=1).max() * R_m
             max_pred  = numpy.linalg.norm(Δdm_pred, axis=1).max() * R_m
             max_corr  = numpy.linalg.norm(δdm_newton, axis=1).max() * R_m
             
-            # Solid correction
-            max_corr_s = numpy.linalg.norm(δd_newton, axis=1).max() * R_m
-            
+                        
             # Newmark: δa = δd / (beta dt²)
             max_da_from_corr = max_corr   / (dynamic.beta * dt_**2)
-            max_da_s         = max_corr_s / (dynamic.beta * dt_**2)
-            
+                        
             log.info(
                 f'[MESH NEWTON CORRECTION] '
                 f'max|Δdm|={max_solve:.6e} m, '
@@ -2465,12 +2480,7 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
                 f'implied |Δa_m|={max_da_from_corr:.6e} m/s2'
             )
             
-            log.info(
-                f'[SOLID NEWTON CORRECTION] '
-                f'max|d_solved-d_pred|={max_corr_s:.6e} m, '
-                f'implied |Δa_s|={max_da_s:.6e} m/s2'
-            )
-            
+                        
             sample = fluid_state['transfer_sample']
             zipped = fluid_state['dm_zipped_interface']
 
