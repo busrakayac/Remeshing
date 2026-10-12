@@ -957,7 +957,8 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
             f'max|A_acc|={Aacc_val.max():.6e} m/s2, '
             f'max|A_geo|={Ageo_val.max():.6e} m/s2, '
             f'max|A_fd-(A_acc+A_geo)|={dA_decomp.max():.6e} m/s2')
-
+    
+    A_mesh = A_fd.copy()
     dm_n_dofs = numpy.zeros_like(V_mesh)
 
     a0dt2_solid = function.replace_arguments(new_ns.d, [('d', 'a0δt2')])
