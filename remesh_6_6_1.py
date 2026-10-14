@@ -1512,6 +1512,9 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
 
         p_field    = new_ns.p,
 
+        direct_traction_residual = res_d_traction,
+        fluid_reaction_residual  = res_d_fluid_reaction,
+
         d_field    = new_ns.dm,
         d_name     = 'dm',
         a0dt2_key  = 'am0δt2',
@@ -2787,6 +2790,12 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
                         f'max={numpy.abs(diff).max():.6e}, '
                         f'rel={numpy.linalg.norm(diff) /max(numpy.linalg.norm(R_lift), 1e-30):.6e}'
                     )
+                if not has_remeshed:
+
+                    free_d_old = ~numpy.isfinite(cons['d']).reshape(-1)
+                
+                    R_old_lift = numpy.asarray(function.eval(res_d_fluid_lift.derivative('dtest'), arguments=args), dtype=float).reshape(-1)[free_d_old]
+                    R_old_direct = numpy.asarray(function.eval(res_d_fluid_direct.derivative('dtest'), arguments=args), dtype=float).reshape(-1)[free_d_old]
                     
                 remesh_count += 1
 
@@ -2822,6 +2831,41 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
                     fluid_state,
                     remesh_count,
                 )
+
+                if not has_remeshed:
+
+                    free_d_new = ~numpy.isfinite(cons['d']).reshape(-1)
+                
+                    R_new_direct = numpy.asarray(function.eval(fluid_state['direct_traction_residual'].derivative('dtest'), arguments=args), dtype=float).reshape(-1)[free_d_new]
+                    R_new_reaction = numpy.asarray(function.eval(fluid_state['fluid_reaction_residual'].derivative('dtest'), arguments=args), dtype=float).reshape(-1)[free_d_new]
+                
+                    d_form     = R_old_direct - R_old_lift
+                    d_transfer = R_new_direct - R_old_direct
+                    d_map      = R_new_reaction - R_new_direct
+                
+                    d_direct_total = R_new_direct   - R_old_lift
+                    d_actual_total = R_new_reaction - R_old_lift
+                
+                    ref = max(numpy.linalg.norm(R_old_lift), 1e-30)
+                
+                    def _log_jump(name, v):
+                        log.info(
+                            f'[COUPLING JUMP] {name}: '
+                            f'L2={numpy.linalg.norm(v):.6e}, '
+                            f'max={numpy.max(numpy.abs(v)):.6e}, '
+                            f'rel={numpy.linalg.norm(v)/ref:.6e}'
+                        )
+                
+                    _log_jump('form old_direct-old_lift', d_form)
+                    _log_jump('transfer new_direct-old_direct', d_transfer)
+                    _log_jump('map new_reaction-new_direct', d_map)
+                    _log_jump('total new_direct-old_lift', d_direct_total)
+                    _log_jump('ACTUAL new_reaction-old_lift', d_actual_total)
+                
+                    denom = numpy.linalg.norm(d_form) * numpy.linalg.norm(d_transfer)
+                    cos_ft = (numpy.dot(d_form, d_transfer) / denom if denom > 0. else numpy.nan)
+                
+                    log.info(f'[COUPLING JUMP] cos(form,transfer)={cos_ft:.6e}')
 
                 fluid_state['remesh_istep'] = istep
                 fluid_state['dam_previous'] = None
