@@ -242,6 +242,34 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     solid_cyl_gauss     = solid_cyl_boundary.sample('gauss', 4)
     solid_cyl_pts_now_m = numpy.asarray(function.eval(solid_cyl_gauss.bind(ns.x), arguments=args) / 'm', dtype=float)
     d_s_remesh_const_m  = numpy.asarray(function.eval(solid_cyl_gauss.bind(ns.d), arguments=args) / 'm', dtype=float)
+    # Old fluid traction at the CURRENT solid Gauss points
+    old_traction_located = old_topo_fluid.boundary['cylinder'].locate(
+        x_field / Length('1m'),
+        solid_cyl_pts_now_m,
+        tol=float(domain.cylinder_radius / 'm') * 1e-4,
+        arguments=args,
+        skip_missing=False,
+    )
+    
+    ns_told = Namespace()
+    ns_told.x = x_field
+    ns_told.define_for('x', gradient='∇', normal='n')
+    ns_told.u = v_field + urel_field
+    ns_told.p = p_field
+    ns_told.μf = fluid.viscosity
+    
+    ns_told.tpres_i = '-p n_i'
+    ns_told.tvisc_i = 'μf (∇_j(u_i) + ∇_i(u_j)) n_j'
+    ns_told.ttot_i  = 'tpres_i + tvisc_i'
+    
+    told_pres, told_visc, told_tot = function.eval(
+        [
+            old_traction_located.bind(ns_told.tpres),
+            old_traction_located.bind(ns_told.tvisc),
+            old_traction_located.bind(ns_told.ttot),
+        ],
+        arguments=args,
+    )
 
     # Old mesh/solid interface velocity BEFORE remeshing
     if fluid_state.get('dm_zipped_interface') is not None:
@@ -387,6 +415,8 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     ns_f.σ_ij    = 'μf (∇_j(u_i) + ∇_i(u_j)) - p δ_ij'
 
     ns_f.traction_i = 'σ_ij n_j'   # fluid stress vector, for the FSI coupling
+    ns_f.tpres_i = '-p n_i'
+    ns_f.tvisc_i = 'μf (∇_j(u_i) + ∇_i(u_j)) n_j'
     new_ns.tsolid_i = 'σcauchy_ij n_j'
 
     ns_f.utest   = new_ns.utest
@@ -1124,6 +1154,45 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
 
     # Interface Lagrange multiplier
     new_args['lam'] = numpy.zeros(function.arguments_for(new_res)['lam'].shape)
+
+    # ------------------------------------------------------------------
+    # Traction transfer check: old vs fresh fluid at identical interface points
+    # ------------------------------------------------------------------
+    
+    tnew_pres, tnew_visc, tnew_tot = function.eval(
+        [
+            fluid_traction_located.bind(ns_f.tpres),
+            fluid_traction_located.bind(ns_f.tvisc),
+            fluid_traction_located.bind(ns_f.traction),
+        ],
+        arguments=new_args,
+    )
+    
+    old_pres = numpy.asarray(told_pres / 'Pa', dtype=float)
+    old_visc = numpy.asarray(told_visc / 'Pa', dtype=float)
+    old_tot  = numpy.asarray(told_tot  / 'Pa', dtype=float)
+    
+    new_pres = numpy.asarray(tnew_pres / 'Pa', dtype=float)
+    new_visc = numpy.asarray(tnew_visc / 'Pa', dtype=float)
+    new_tot  = numpy.asarray(tnew_tot  / 'Pa', dtype=float)
+    
+    def _traction_error(label, old_t, new_t):
+        err = numpy.linalg.norm(new_t - old_t, axis=-1)
+        ref = numpy.linalg.norm(old_t, axis=-1)
+    
+        err_rms = numpy.sqrt(numpy.mean(err**2))
+        ref_rms = max(numpy.sqrt(numpy.mean(ref**2)), 1e-30)
+    
+        log.info(
+            f'[TRACTION TRANSFER] {label}: '
+            f'max={err.max():.6e} Pa, '
+            f'RMS={err_rms:.6e} Pa, '
+            f'relRMS={err_rms/ref_rms:.6e}'
+        )
+    
+    _traction_error('pressure', old_pres, new_pres)
+    _traction_error('viscous',  old_visc, new_visc)
+    _traction_error('total',    old_tot,  new_tot)
 
     # ------------------------------------------------------------------
     # DIAGNOSTIC: physical momentum terms before vs after transfer
