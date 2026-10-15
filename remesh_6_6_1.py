@@ -270,6 +270,9 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
         ],
         arguments=args,
     )
+    old_zipped_traction = solid_cyl_gauss.zip(old_traction_located)
+    res_old_direct_samequad = old_zipped_traction.integral(_dot2(ns.dtest, ns_told.ttot) * ns.dS)
+    R_old_direct_samequad_full = numpy.asarray(function.eval(res_old_direct_samequad.derivative('dtest'), arguments=args), dtype=float).reshape(-1)
 
     # Old mesh/solid interface velocity BEFORE remeshing
     if fluid_state.get('dm_zipped_interface') is not None:
@@ -516,8 +519,8 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
         f'scalar P2 trace dofs={len(i_dm_gamma_scalar)}'
     )
 
-    new_res += zipped_traction.integral(_dot2(new_ns.dtest, ns_f.traction) * new_ns.dS)
-
+    res_d_traction = zipped_traction.integral(_dot2(new_ns.dtest, ns_f.traction) * new_ns.dS)
+    new_res += res_d_traction
     # Interface target 
     d_s_remesh_coeffs = numpy.array(args['d'], copy=True)
 
@@ -1513,7 +1516,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
         p_field    = new_ns.p,
 
         direct_traction_residual = res_d_traction,
-        fluid_reaction_residual  = res_d_fluid_reaction,
+        old_direct_samequad_vector = R_old_direct_samequad_full,
 
         d_field    = new_ns.dm,
         d_name     = 'dm',
@@ -2835,16 +2838,13 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
                 if not has_remeshed:
 
                     free_d_new = ~numpy.isfinite(cons['d']).reshape(-1)
-                
                     R_new_direct = numpy.asarray(function.eval(fluid_state['direct_traction_residual'].derivative('dtest'), arguments=args), dtype=float).reshape(-1)[free_d_new]
-                    R_new_reaction = numpy.asarray(function.eval(fluid_state['fluid_reaction_residual'].derivative('dtest'), arguments=args), dtype=float).reshape(-1)[free_d_new]
-                
+                    R_old_direct_samequad = (fluid_state['old_direct_samequad_vector'][free_d_new])
+                    
                     d_form     = R_old_direct - R_old_lift
-                    d_transfer = R_new_direct - R_old_direct
-                    d_map      = R_new_reaction - R_new_direct
-                
-                    d_direct_total = R_new_direct   - R_old_lift
-                    d_actual_total = R_new_reaction - R_old_lift
+                    d_operator = R_old_direct_samequad - R_old_direct
+                    d_transfer = R_new_direct - R_old_direct_samequad
+                    d_total    = R_new_direct - R_old_lift
                 
                     ref = max(numpy.linalg.norm(R_old_lift), 1e-30)
                 
@@ -2857,12 +2857,12 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
                         )
                 
                     _log_jump('form old_direct-old_lift', d_form)
+                    _log_jump('operator samequad-old_direct', d_operator)
                     _log_jump('transfer new_direct-old_direct', d_transfer)
-                    _log_jump('map new_reaction-new_direct', d_map)
-                    _log_jump('total new_direct-old_lift', d_direct_total)
-                    _log_jump('ACTUAL new_reaction-old_lift', d_actual_total)
+                    _log_jump('TOTAL new_direct-old_lift', d_total)
                 
                     denom = numpy.linalg.norm(d_form) * numpy.linalg.norm(d_transfer)
+                
                     cos_ft = (numpy.dot(d_form, d_transfer) / denom if denom > 0. else numpy.nan)
                 
                     log.info(f'[COUPLING JUMP] cos(form,transfer)={cos_ft:.6e}')
