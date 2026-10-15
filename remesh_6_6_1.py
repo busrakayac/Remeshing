@@ -270,8 +270,9 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
         ],
         arguments=args,
     )
-    old_zipped_traction = solid_cyl_gauss.zip(old_traction_located)
-    res_old_direct_samequad = old_zipped_traction.integral(_dot2(ns.dtest, ns_told.ttot) * ns.dS)
+    # Old traction represented on the SOLID Gauss sample
+    told_tot_solid = (solid_cyl_gauss.asfunction(numpy.asarray(told_tot / 'Pa', dtype=float)) * Pressure('1Pa'))
+    res_old_direct_samequad = solid_cyl_gauss.integral(_dot2(ns.dtest, told_tot_solid) * ns.dS)
     R_old_direct_samequad_full = numpy.asarray(function.eval(res_old_direct_samequad.derivative('dtest'), arguments=args), dtype=float).reshape(-1)
 
     # Old mesh/solid interface velocity BEFORE remeshing
