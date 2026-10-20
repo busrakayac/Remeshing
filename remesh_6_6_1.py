@@ -853,7 +853,8 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     # Target old viscous traction, nondimensionalised with μ U / R
     traction_scale = fluid.viscosity * fluid.velocity / domain.cylinder_radius
     
-    ns_proj.tvisctarget = zipped_traction.asfunction(numpy.asarray(told_visc / traction_scale, dtype=float))
+    ns_proj.tvisctarget = solid_cyl_gauss.asfunction(numpy.asarray(told_visc / traction_scale, dtype=float), interpolation='nearest')
+    ns_proj.dSsolid = function.J(new_ns.xs / domain.cylinder_radius)
     
     # New projected viscous traction, without μ because of the scaling above
     ns_proj.tvisc_i = '(∇_j(uf_i) + ∇_i(uf_j)) n_j'
@@ -869,7 +870,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
         '+ wH1 ∇_j(uprojtest_i) '
         '(∇_j(uf_i) - gtarget_ij)'
     ) @ ns_proj)
-    res_proj += ns_proj.wGamma * zipped_traction.integral(('tvisctest_i (tvisc_i - tvisctarget_i)' @ ns_proj) * ns_proj.dS)
+    res_proj += ns_proj.wGamma * zipped_traction.integral(('tvisctest_i (tvisc_i - tvisctarget_i)' @ ns_proj) * ns_proj.dSsolid)
     
     res_proj += new_topo['fluid'].integral('qproj ∇_i(uprojtest_i) dV' @ ns_proj, degree=4)
     res_proj += new_topo['fluid'].integral('qprojtest ∇_i(uf_i) dV' @ ns_proj, degree=4)
