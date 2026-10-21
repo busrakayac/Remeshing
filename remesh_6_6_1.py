@@ -865,7 +865,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     ns_old_cyl.uf = v_field + urel_field
     
     old_graduf_cyl = numpy.asarray(function.eval(old_cyl_located.bind('∇_j(uf_i)' @ ns_old_cyl), arguments=args) / '1/s', dtype=float)
-    ns_proj.gtarget_cyl = new_cyl_sample.asfunction((old_graduf_cyl * R_scale / u_scale).astype(float))
+    ns_proj.gtargetcyl = new_cyl_sample.asfunction((old_graduf_cyl * R_scale / u_scale).astype(float))
     
     ns_proj.wGamma = 0.01
     
@@ -880,7 +880,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
         '(∇_j(uf_i) - gtarget_ij)'
     ) @ ns_proj)
     
-    res_proj += ns_proj.wGamma * new_cyl_sample.integral('∇_j(uprojtest_i) (∇_j(uf_i) - gtarget_cyl_ij)' @ ns_proj)
+    res_proj += ns_proj.wGamma * new_cyl_sample.integral('∇_j(uprojtest_i) (∇_j(uf_i) - gtargetcyl_ij)' @ ns_proj)
     
     res_proj += new_topo['fluid'].integral('qproj ∇_i(uprojtest_i) dV' @ ns_proj, degree=4)
     res_proj += new_topo['fluid'].integral('qprojtest ∇_i(uf_i) dV' @ ns_proj, degree=4)
