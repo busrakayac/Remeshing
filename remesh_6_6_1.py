@@ -851,7 +851,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     new_cyl_sample = new_topo['fluid'].boundary['cylinder'].sample('gauss', 4)
     new_cyl_x_m = numpy.asarray(new_cyl_sample.eval(new_geom) / 'm', dtype=float)
     
-    old_cyl_located = old_topo_fluid.locate(
+    old_cyl_located = old_topo_fluid.boundary['cylinder'].locate(
         x_field / Length('1m'),
         new_cyl_x_m,
         tol=transfer_tol_m,
