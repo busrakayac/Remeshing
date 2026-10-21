@@ -463,7 +463,8 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     res_fluid_visc = new_topo['fluid'].integral('∇_j(utest_i) μf (∇_j(u_i) + ∇_i(u_j)) dV' @ ns_f, degree=4)
     res_fluid_pres = new_topo['fluid'].integral('-∇_j(utest_i) p δ_ij dV' @ ns_f, degree=4)
 
-    new_res += res_fluid_acc + res_fluid_conv + res_fluid_visc + res_fluid_pres
+    res_fluid_mom = res_fluid_acc + res_fluid_conv + res_fluid_visc + res_fluid_pres
+    new_res += res_fluid_mom
     new_res += new_topo['fluid'].integral('ptest ∇_k(u_k) dV' @ ns_f, degree=4)
 
     # ------------------------------------------------------------------
@@ -1384,6 +1385,13 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     # Activate divergence-free restart
     new_args['u']  = urel_proj_dofs
     new_args['u0'] = u0_proj
+    # Momentum-consistent fluid acceleration after remeshing
+    u0_cons = numpy.full_like(new_args['u0'], numpy.nan)
+    
+    u_fixed = numpy.isfinite(new_cons['u'])
+    u0_cons[u_fixed] = new_args['u0'][u_fixed]
+    u0_eq = System(res_fluid_mom, trial='u0', test='utest').solve(constrain={'u0': u0_cons}, arguments=new_args, tol=1e-12)
+    new_args['u0'] = u0_eq['u0']
 
     tproj_pres, tproj_visc, tproj_tot = function.eval([fluid_traction_located.bind(ns_f.tpres), fluid_traction_located.bind(ns_f.tvisc), fluid_traction_located.bind(ns_f.traction)], arguments=new_args)
     
