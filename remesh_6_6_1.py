@@ -1385,6 +1385,13 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     new_args['u']  = urel_proj_dofs
     new_args['u0'] = u0_proj
 
+    tproj_pres, tproj_visc, tproj_tot = function.eval([fluid_traction_located.bind(ns_f.tpres), fluid_traction_located.bind(ns_f.tvisc), fluid_traction_located.bind(ns_f.traction)], arguments=new_args)
+    
+    _traction_error('pressure POST-PROJ', old_pres, numpy.asarray(tproj_pres / 'Pa', dtype=float))
+    _traction_error('viscous POST-PROJ',  old_visc, numpy.asarray(tproj_visc / 'Pa', dtype=float))
+    _traction_error('total POST-PROJ',    old_tot,  numpy.asarray(tproj_tot  / 'Pa', dtype=float))
+        
+
     # ------------------------------------------------------------------
     # CHECK: is physical fluid velocity preserved by remeshing?
     #
