@@ -867,7 +867,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     old_graduf_cyl = numpy.asarray(function.eval(old_cyl_located.bind('∇_j(uf_i)' @ ns_old_cyl), arguments=args) / '1/s', dtype=float)
     ns_proj.gtargetcyl = new_cyl_sample.asfunction((old_graduf_cyl * R_scale / u_scale).astype(float))
     
-    ns_proj.wGamma = 0.01
+    ns_proj.wGamma = 0.1
     
     # H1 weight
     ns_proj.wH1 = 0.5**2
