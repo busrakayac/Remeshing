@@ -882,7 +882,10 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
         '((∇_j(uf_i) + ∇_i(uf_j)) - (gtarget_ij + gtarget_ji))'
     ) @ ns_proj)
     
-    res_proj += ns_proj.wGamma * new_cyl_sample.integral('∇_j(uprojtest_i) (∇_j(uf_i) - gtargetcyl_ij)' @ ns_proj)
+    res_proj += 0.25 * ns_proj.wGamma * new_cyl_sample.integral(
+        '(∇_j(uprojtest_i) + ∇_i(uprojtest_j)) '
+        '((∇_j(uf_i) + ∇_i(uf_j)) - '
+        '(gtargetcyl_ij + gtargetcyl_ji))' @ ns_proj)
     
     res_proj += new_topo['fluid'].integral('qproj ∇_i(uprojtest_i) dV' @ ns_proj, degree=4)
     res_proj += new_topo['fluid'].integral('qprojtest ∇_i(uf_i) dV' @ ns_proj, degree=4)
