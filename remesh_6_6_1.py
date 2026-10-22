@@ -871,14 +871,15 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     ns_proj.wGamma = 0.1
     
     # H1 weight
-    ns_proj.wH1 = 1.0
+    ns_proj.wH1 = 0.5**2
     # Target old viscous traction, nondimensionalised with μ U / R
     
     
     res_proj = new_dof_sample.integral((
         'uprojtest_i (uf_i - utarget_i) '
-        '+ wH1 ∇_j(uprojtest_i) '
-        '(∇_j(uf_i) - gtarget_ij)'
+        '+ 0.25 wH1 '
+        '(∇_j(uprojtest_i) + ∇_i(uprojtest_j)) '
+        '((∇_j(uf_i) + ∇_i(uf_j)) - (gtarget_ij + gtarget_ji))'
     ) @ ns_proj)
     
     res_proj += ns_proj.wGamma * new_cyl_sample.integral('∇_j(uprojtest_i) (∇_j(uf_i) - gtargetcyl_ij)' @ ns_proj)
