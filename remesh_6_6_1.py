@@ -871,7 +871,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     ns_proj.wGamma = 0.1
     
     # H1 weight
-    ns_proj.wH1 = 0.5**2
+    ns_proj.wH1 = 1.0
     # Target old viscous traction, nondimensionalised with μ U / R
     
     
@@ -1385,14 +1385,6 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     # Activate divergence-free restart
     new_args['u']  = urel_proj_dofs
     new_args['u0'] = u0_proj
-    # Momentum-consistent fluid acceleration after remeshing
-    u0_cons = numpy.full_like(new_args['u0'], numpy.nan)
-    
-    u_fixed = numpy.isfinite(new_cons['u'])
-    u0_cons[u_fixed] = new_args['u0'][u_fixed]
-    u0_eq = System(res_fluid_mom, trial='u0', test='utest').solve(constrain={'u0': u0_cons}, arguments=new_args, tol=1e-12)
-    new_args['u0'] = u0_eq['u0']
-
     tproj_pres, tproj_visc, tproj_tot = function.eval([fluid_traction_located.bind(ns_f.tpres), fluid_traction_located.bind(ns_f.tvisc), fluid_traction_located.bind(ns_f.traction)], arguments=new_args)
     
     _traction_error('pressure POST-PROJ', old_pres, numpy.asarray(tproj_pres / 'Pa', dtype=float))
