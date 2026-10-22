@@ -462,6 +462,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     res_fluid_conv = new_topo['fluid'].integral('utest_i ρf ∇_j(u_i) urel_j dV' @ ns_f, degree=4)
     res_fluid_visc = new_topo['fluid'].integral('∇_j(utest_i) μf (∇_j(u_i) + ∇_i(u_j)) dV' @ ns_f, degree=4)
     res_fluid_pres = new_topo['fluid'].integral('-∇_j(utest_i) p δ_ij dV' @ ns_f, degree=4)
+    res_fluid_mom = res_fluid_acc + res_fluid_conv + res_fluid_visc + res_fluid_pres
 
     res_fluid_mom = res_fluid_acc + res_fluid_conv + res_fluid_visc + res_fluid_pres
     new_res += res_fluid_mom
@@ -1351,6 +1352,30 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
         f'[PROJECTED RESTART] '
         f'||Ru|| transfer={numpy.linalg.norm(ru_transfer):.6e}, '
         f'projected={numpy.linalg.norm(ru_projected):.6e}'
+    )
+
+    # Diagnostic only: u-correction required for momentum equilibrium
+    u_corr_solution = System(res_fluid_mom, trial='u', test='utest').solve(constrain={'u': new_ucons}, arguments=projected_args, tol=1e-12)
+    
+    corrected_args = dict(projected_args)
+    corrected_args['u'] = u_corr_solution['u']
+    
+    ru_corrected = numpy.asarray(function.eval(ru_expr, arguments=corrected_args)).reshape(-1)[free_u]
+    rp_corrected = numpy.asarray(function.eval(rp_expr, arguments=corrected_args)).reshape(-1)
+    
+    if 'p' in new_cons:
+        rp_corrected = rp_corrected[free_p]
+    
+    du_corr_g = function.eval(new_dof_sample.bind(new_ns.urel), arguments={'u': u_corr_solution['u'] - urel_proj_dofs})
+    du_corr = numpy.linalg.norm(numpy.asarray(du_corr_g / 'm/s'), axis=-1)
+    
+    log.info(
+        f'[RAW-PROJ-CORRECTED MOMENTUM] '
+        f'Ru raw={numpy.linalg.norm(ru_transfer):.6e}, '
+        f'projected={numpy.linalg.norm(ru_projected):.6e}, '
+        f'corrected={numpy.linalg.norm(ru_corrected):.6e}, '
+        f'Rp corrected={numpy.linalg.norm(rp_corrected):.6e}, '
+        f'max|du_corr|={du_corr.max():.6e} m/s'
     )
     # ------------------------------------------------------------------
     # DIAGNOSTIC: effect of projection on each momentum term
