@@ -827,7 +827,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     
     # Dimensionless coordinates
     ns_proj.x = new_geom / domain.cylinder_radius
-    ns_proj.define_for('x', gradient='∇', jacobians=('dV',))
+    ns_proj.define_for('x', gradient='∇', normal='n', jacobians=('dV', 'dS'))
     
     # Unknown relative velocity
     ns_proj.uproj = new_topo['fluid'].field('uproj', btype='std', degree=2, shape=(2,))
@@ -882,10 +882,11 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
         '((∇_j(uf_i) + ∇_i(uf_j)) - (gtarget_ij + gtarget_ji))'
     ) @ ns_proj)
     
-    res_proj += 0.25 * ns_proj.wGamma * new_cyl_sample.integral(
-        '(∇_j(uprojtest_i) + ∇_i(uprojtest_j)) '
-        '((∇_j(uf_i) + ∇_i(uf_j)) - '
-        '(gtargetcyl_ij + gtargetcyl_ji))' @ ns_proj)
+    res_proj += ns_proj.wGamma * new_cyl_sample.integral(
+        '((∇_j(uprojtest_i) + ∇_i(uprojtest_j)) n_j) '
+        '(((∇_k(uf_i) + ∇_i(uf_k)) n_k) '
+        '- ((gtargetcyl_ik + gtargetcyl_ki) n_k))' @ ns_proj
+    )
     
     res_proj += new_topo['fluid'].integral('qproj ∇_i(uprojtest_i) dV' @ ns_proj, degree=4)
     res_proj += new_topo['fluid'].integral('qprojtest ∇_i(uf_i) dV' @ ns_proj, degree=4)
