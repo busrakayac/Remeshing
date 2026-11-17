@@ -1936,7 +1936,7 @@ class Domain:
     channel_height: Length = Length('0.0004m')
     cylinder_radius: Length = Length('0.00003m')
     
-    elemsize: Length = Length('0.000012m')
+    elemsize: Length = Length('0.000018m')
     coarsening: float = 4.
 
     def generate_mesh(self):
@@ -2344,7 +2344,7 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
     # Track whether we have remeshed (changes which Newmark keys exist)
     has_remeshed = False
 
-    particle_csv = Path('Dtrial.csv')
+    particle_csv = Path('D_coarser.csv')
     particle_csv.write_text('time,step,L_particle,B_particle,deformation_index\n')
 
     for istep, t in enumerate(log.iter.fraction('timestep', dynamic.times) if dynamic else [Time.wrap(float('inf'))], start=1):
