@@ -65,9 +65,10 @@ def write_fluid_remesh_geo(boundary_xy_m, domain, filename, bezier_edges=None):
     W = float(domain.channel_height / 'm')
     R = float(domain.cylinder_radius / 'm')
 
-    h_particle = R / 2.5
-    h_far      = W / 6.0
-    r_grow     = 8.0 * R
+    h_particle = float(domain.elemsize / 'm')
+    h_far = h_particle * domain.coarsening
+    d_plateau = R
+    Lgrow = 10.0 * R
 
     first_point = 1001
     first_line  = 2001
@@ -155,15 +156,18 @@ def write_fluid_remesh_geo(boundary_xy_m, domain, filename, bezier_edges=None):
         f.write('Mesh.Optimize = 1;\n')
         f.write('Mesh.OptimizeNetgen = 1;\n\n')
 
-        # Distance-based refinement around the particle
+        # Exponential refinement around the particle
         f.write('Field[1] = Distance;\n')
         f.write(f'Field[1].CurvesList = {{{line_string}}};\n')
-        f.write('\nField[2] = Threshold;\n')
-        f.write('Field[2].InField = 1;\n')
-        f.write('Field[2].DistMin = 0;\n')
-        f.write(f'Field[2].DistMax = {r_grow:.16e};\n')
-        f.write(f'Field[2].SizeMin = {h_particle:.16e};\n')
-        f.write(f'Field[2].SizeMax = {h_far:.16e};\n')
+
+        f.write('\nField[2] = MathEval;\n')
+        f.write(
+            'Field[2].F = '
+            f'"Min({h_far:.16e},'
+            f'{h_particle:.16e}*Exp('
+            f'Log({h_far:.16e}/{h_particle:.16e})*'
+            f'Max(F1-{d_plateau:.16e},0)/{Lgrow:.16e}))";\n'
+        )
         f.write('\nBackground Field = 2;\n')
 
 
