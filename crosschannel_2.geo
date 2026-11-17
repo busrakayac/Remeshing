@@ -138,58 +138,27 @@ Mesh.OptimizeNetgen = 1;
 // ------------------------------------------------------
 // Mesh sizes
 // ------------------------------------------------------
-
-// Particle radius = 8e-6 m.
-// h_particle = R/3 gives about 19 elements around the circumference
-// and about 6 elements across the diameter.
-h_particle = cylinder_radius / 2.5;
-
-// Far-field mesh size.
-// channel_height/10 gives about 10 elements across the channel height.
-h_far = channel_height / 6;
-
-// Smooth transition length.
-// 30R is smoother than 20R or 25R, so the mesh does not jump suddenly.
-r_grow = 8 * cylinder_radius;
-
 // ------------------------------------------------------
-// Distance from particle boundary
+// Exponential mesh refinement around the particle
 // ------------------------------------------------------
 
+h_particle = elemsize;
+h_far = coarsening * elemsize;
+
+d_plateau = cylinder_radius;
+Lgrow = 10.0 * cylinder_radius;
+
+// Distance from the particle boundary
 Field[1] = Distance;
 Field[1].CurvesList = {bnd_solid()};
 Field[1].NumPointsPerCurve = 300;
 
-// Gradual transition from h_particle to h_far
-Field[2] = Threshold;
-Field[2].InField = 1;
+// Exponential element-size growth
+Field[2] = MathEval;
+Field[2].F = Sprintf(
+    "Min(%g,%g*Exp(Log(%g/%g)*Max(F1-%g,0)/%g))",
+    h_far, h_particle, h_far, h_particle, d_plateau, Lgrow
+);
 
-Field[2].DistMin = 0;
-Field[2].DistMax = r_grow;
+Background Field = 2;
 
-Field[2].SizeMin = h_particle;
-Field[2].SizeMax = h_far;
-
-// ------------------------------------------------------
-// Keep the particle interior fine
-// ------------------------------------------------------
-
-Field[3] = Box;
-Field[3].VIn  = h_particle;
-Field[3].VOut = h_far;
-
-Field[3].XMin = particle_x_offset - 1.2*cylinder_radius;
-Field[3].XMax = particle_x_offset + 1.2*cylinder_radius;
-Field[3].YMin = particle_y_offset - 1.2*cylinder_radius;
-Field[3].YMax = particle_y_offset + 1.2*cylinder_radius;
-Field[3].ZMin = -1;
-Field[3].ZMax =  1;
-
-// ------------------------------------------------------
-// Use the finest requested size
-// ------------------------------------------------------
-
-Field[4] = Min;
-Field[4].FieldsList = {2,3};
-
-Background Field = 4;
