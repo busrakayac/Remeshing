@@ -9,7 +9,6 @@ from typing import Optional
 from pathlib import Path
 import treelog as log
 import numpy
-from scipy.interpolate import LinearNDInterpolator
 import subprocess
 import meshio
 
@@ -277,10 +276,6 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
             old_traction_located.bind(ns_told.tvisc),
             old_traction_located.bind(ns_told.ttot),
         ], arguments=args)
-    # Old traction represented on the SOLID Gauss sample
-    told_tot_solid = (solid_cyl_gauss.asfunction(numpy.asarray(told_tot / 'Pa', dtype=float)) * Pressure('1Pa'))
-    res_old_direct_samequad = solid_cyl_gauss.integral(_dot2(ns.dtest, told_tot_solid) * ns.dS)
-    R_old_direct_samequad_full = numpy.asarray(function.eval(res_old_direct_samequad.derivative('dtest'), arguments=args), dtype=float).reshape(-1)
 
     # Old mesh/solid interface velocity BEFORE remeshing
     if fluid_state.get('dm_zipped_interface') is not None:
@@ -593,13 +588,10 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     new_res += res_fluid_inc
 
     # ------------------------------------------------------------------
-    # FSI coupling: fluid traction acting on the solid boundary.
-    #
-    # After remeshing, fluid and solid no longer share a common finite-element topology, so the original "volume lift" identity
-    # ∮ d·σ·n dΓ = ∫ (∇d:σ + d·ρDuDt) dV (valid only when d and u share dofs on the SAME mesh) no longer applies.  
-    # Instead we impose the coupling directly as a boundary traction term, evaluated at matching physical points via
-    # Topology.locate, combined via Sample.zip so that the solid's own Gauss quadrature provides the (correct, persistent) weights:
-    # ∮_cylinder dtest_i (σ_ij n_j) dΓ
+    # Physical FSI coupling after remeshing:
+    # lamf imposes urel=0 weakly and transfers the interface reaction
+    # between fluid and solid with opposite signs.
+    # Topology.locate and Sample.zip provide matching interface quadrature.
 
     locate_tol_m = float(domain.cylinder_radius / 'm') * 1e-4
 
@@ -706,7 +698,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     # Reaction term: +∫ λ·δd_m  ONLY.
     # The multiplier must NOT push back on the solid (no −∫ λ·δd_s term).
     # The mesh-extension problem is artificial numerical machinery; its reaction is not a physical force.  
-    # The genuine fluid force on the solid is already supplied by the traction term above.  
+    # The physical fluid force on the solid is supplied by lamf above. 
     # The coupling is therefore one-directional in the kinematic sense:
     
     # d_s  ——> interface constraint ——>  d_m
@@ -1095,12 +1087,15 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     new_cyl_sample = new_topo['fluid'].boundary['cylinder'].sample('gauss', 4)
     new_cyl_x_m = numpy.asarray(new_cyl_sample.eval(new_geom) / 'm', dtype=float)
     
-    old_cyl_located = old_topo_fluid.boundary['cylinder'].locate(
-        x_field / Length('1m'),
-        new_cyl_x_m,
-        tol=transfer_tol_m,
-        arguments=args,
-        skip_missing=False)
+        for tol_cyl in (1e-4*R_m, 5e-4*R_m, 1e-3*R_m):
+            try:
+                old_cyl_located = old_topo_fluid.boundary['cylinder'].locate(
+                    x_field / Length('1m'), new_cyl_x_m,
+                    tol=tol_cyl, arguments=args, skip_missing=False)
+                break
+            except Exception:
+                if tol_cyl == 1e-3*R_m:
+                    raise
     
     ns_old_cyl = Namespace()
     ns_old_cyl.x = x_field
@@ -2565,6 +2560,8 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
                     f'max={numpy.abs(r).max():.6e}')
         
             rsum = ra + rc + rv + rp
+            rfull = numpy.asarray(function.eval(res.derivative('utest'), arguments=args)).reshape(-1)[free_u]
+            log.info(f'[FLUID RESIDUAL SPLIT] including lamf: L2={numpy.linalg.norm(rfull):.6e}')
             
             log.info(
                 f'[FLUID RESIDUAL SPLIT] total: '
@@ -2579,6 +2576,7 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
                 ('u',   'utest'),      # fluid momentum
                 ('p',   'ptest'),      # fluid incompressibility
                 ('lam', 'lamtest'),    # interface constraint
+                ('lamf', 'lamftest'),  # weak no-slip constraint
             ):
 
                 values = numpy.asarray(function.eval(res.derivative(test_name), arguments=args), dtype=float).reshape(-1)
@@ -2652,7 +2650,28 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
 
             raise
          
-        
+        if has_remeshed and istep == fluid_state['remesh_istep'] + 1:
+            Ru = numpy.asarray(function.eval(fluid_state['reaction_res_fluid_mom'].derivative('utest'), arguments=args), dtype=float).reshape(-1)
+            Rlamf = numpy.asarray(function.eval(fluid_state['reaction_res_solid_lamf'].derivative('dtest'), arguments=args), dtype=float).reshape(-1)
+
+            i_u = fluid_state['reaction_i_u_gamma']
+            i_d = fluid_state['reaction_i_d_gamma']
+            Tdu = fluid_state['reaction_Tdu']
+
+            Rreaction = Tdu.T @ Ru[i_u]
+            Rlamf_gamma = Rlamf[i_d]
+
+            diff = Rlamf_gamma - Rreaction
+            summ = Rlamf_gamma + Rreaction
+
+            log.info(
+                f'[LAMF-REACTION] '
+                f'||reaction||={numpy.linalg.norm(Rreaction):.6e}, '
+                f'||lamf||={numpy.linalg.norm(Rlamf_gamma):.6e}, '
+                f'||lamf-reaction||={numpy.linalg.norm(diff):.6e}, '
+                f'||lamf+reaction||={numpy.linalg.norm(summ):.6e}, '
+                f'rel={numpy.linalg.norm(diff)/max(numpy.linalg.norm(Rreaction),1e-30):.6e}')
+            
         if has_remeshed and istep <= fluid_state['remesh_istep'] + 10:
 
                 P_ = float((fluid.viscosity * fluid.velocity / domain.cylinder_radius) / 'Pa')
@@ -3049,12 +3068,6 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
                         f'max={numpy.abs(diff).max():.6e}, '
                         f'rel={numpy.linalg.norm(diff) /max(numpy.linalg.norm(R_lift), 1e-30):.6e}'
                     )
-                if not has_remeshed:
-
-                    free_d_old = ~numpy.isfinite(cons['d']).reshape(-1)
-                
-                    R_old_lift = numpy.asarray(function.eval(res_d_fluid_lift.derivative('dtest'), arguments=args), dtype=float).reshape(-1)[free_d_old]
-                    R_old_direct = numpy.asarray(function.eval(res_d_fluid_direct.derivative('dtest'), arguments=args), dtype=float).reshape(-1)[free_d_old]
                     
                 remesh_count += 1
 
@@ -3090,38 +3103,6 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
                     fluid_state,
                     remesh_count,
                 )
-
-                if not has_remeshed:
-
-                    free_d_new = ~numpy.isfinite(cons['d']).reshape(-1)
-                    R_new_direct = numpy.asarray(function.eval(fluid_state['direct_traction_residual'].derivative('dtest'), arguments=args), dtype=float).reshape(-1)[free_d_new]
-                    R_old_direct_samequad = (fluid_state['old_direct_samequad_vector'][free_d_new])
-                    
-                    d_form     = R_old_direct - R_old_lift
-                    d_operator = R_old_direct_samequad - R_old_direct
-                    d_transfer = R_new_direct - R_old_direct_samequad
-                    d_total    = R_new_direct - R_old_lift
-                
-                    ref = max(numpy.linalg.norm(R_old_lift), 1e-30)
-                
-                    def _log_jump(name, v):
-                        log.info(
-                            f'[COUPLING JUMP] {name}: '
-                            f'L2={numpy.linalg.norm(v):.6e}, '
-                            f'max={numpy.max(numpy.abs(v)):.6e}, '
-                            f'rel={numpy.linalg.norm(v)/ref:.6e}'
-                        )
-                
-                    _log_jump('form old_direct-old_lift', d_form)
-                    _log_jump('operator samequad-old_direct', d_operator)
-                    _log_jump('transfer new_direct-old_direct', d_transfer)
-                    _log_jump('TOTAL new_direct-old_lift', d_total)
-                
-                    denom = numpy.linalg.norm(d_form) * numpy.linalg.norm(d_transfer)
-                
-                    cos_ft = (numpy.dot(d_form, d_transfer) / denom if denom > 0. else numpy.nan)
-                
-                    log.info(f'[COUPLING JUMP] cos(form,transfer)={cos_ft:.6e}')
 
                 fluid_state['remesh_istep'] = istep
                 fluid_state['dam_previous'] = None
