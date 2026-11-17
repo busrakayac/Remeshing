@@ -586,7 +586,6 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     res_fluid_conv = new_topo['fluid'].integral('utest_i ρf ∇_j(u_i) urel_j dV' @ ns_f, degree=4)
     res_fluid_visc = new_topo['fluid'].integral('∇_j(utest_i) μf (∇_j(u_i) + ∇_i(u_j)) dV' @ ns_f, degree=4)
     res_fluid_pres = new_topo['fluid'].integral('-∇_j(utest_i) p δ_ij dV' @ ns_f, degree=4)
-    res_fluid_mom = res_fluid_acc + res_fluid_conv + res_fluid_visc + res_fluid_pres
 
     res_fluid_mom = res_fluid_acc + res_fluid_conv + res_fluid_visc + res_fluid_pres
     new_res += res_fluid_mom
@@ -772,17 +771,18 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     # the convex hull of the old Gauss cloud — which happens precisely near the cylinder, where accuracy matters most.
     # Independent of locate_tol_m, which the FSI-coupling block above may have loosened on retry; that must not silently affect field transfer.
 
-    transfer_tol_m = float(domain.cylinder_radius / 'm') * 1e-4
+    R_m = float(domain.cylinder_radius / 'm')
     transfer_via_locate = False
-
     new_graduf = None
-    try:
-        # locate must be performed in the OLD mesh's *physical* (deformed ALE) coordinates, because new_dof_x_m are physical positions.
-        # x_field is exactly that (= X_old + d_m_old); strip its SI unit and supply args so the displacement part evaluates.
-
-        old_located = old_topo_fluid.locate(x_field / Length('1m'), new_dof_x_m, tol=transfer_tol_m, arguments=args, skip_missing=False)
-        
-        (t_uf, t_vm, t_am, t_urel, t_arel, t_p, t_a0dt2, t_u0, t_a0dt_urel) = function.eval([
+    
+    for transfer_tol_m in [1e-4*R_m, 5e-4*R_m, 1e-3*R_m]:
+        try:
+            #Find the corresponding positions in the old fluid topology where the existing finite-element solution can be evaluated.
+            old_located = old_topo_fluid.locate(x_field / Length('1m'), new_dof_x_m, tol=transfer_tol_m, arguments=args, skip_missing=False)
+            
+            #Evaluate the old solution and Newmark history
+            (t_uf, t_vm, t_am, t_urel, t_arel, t_p,
+             t_a0dt2, t_u0, t_a0dt_urel) = function.eval([
                 old_located.bind(v_field + urel_field),
                 old_located.bind(v_field),
                 old_located.bind(a_field),
@@ -792,64 +792,148 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
                 old_located.bind(a0dt2_expr),
                 old_located.bind(u0_expr),
                 old_located.bind(a0dt_urel_expr)], arguments=args)
-        ns_old_grad = Namespace()
-        ns_old_grad.x = x_field
-        ns_old_grad.define_for('x', gradient='∇')
-        ns_old_grad.uf = v_field + urel_field
-        
-        t_graduf = function.eval(old_located.bind('∇_j(uf_i)' @ ns_old_grad), arguments=args)
-        
-        new_graduf = numpy.asarray(t_graduf / '1/s', dtype=float)
 
+            #Transfer the physical fluid velocity "gradient"
+            ns_old_grad = Namespace()
+            ns_old_grad.x = x_field
+            ns_old_grad.define_for('x', gradient='∇') #It defines gradients with respect to the old physical fluid geometry
+            ns_old_grad.uf = v_field + urel_field
+    
+            t_graduf = function.eval(old_located.bind('∇_j(uf_i)' @ ns_old_grad), arguments=args) #evaluates the gradient at the located points. 
+            new_graduf = numpy.asarray(t_graduf / '1/s', dtype=float) # contains the physical fluid velocity gradient, not the gradient of the relative velocity alone.
 
-        new_uf_x, new_uf_y = numpy.asarray(t_uf / 'm/s', dtype=float).T
-        new_vm_x, new_vm_y = numpy.asarray(t_vm / 'm/s', dtype=float).T
-        new_am_x, new_am_y = numpy.asarray(t_am / 'm/s2', dtype=float).T
-        new_urel_x, new_urel_y = numpy.asarray(t_urel / 'm/s', dtype=float).T
-        new_arel_x, new_arel_y = numpy.asarray(t_arel / 'm/s2', dtype=float).T
-        new_p_Pa = numpy.asarray(t_p / 'Pa', dtype=float)
+            #Convert the evaluated quantities into numerical arrays
+            new_uf_x, new_uf_y = numpy.asarray(t_uf / 'm/s', dtype=float).T
+            new_vm_x, new_vm_y = numpy.asarray(t_vm / 'm/s', dtype=float).T
+            new_am_x, new_am_y = numpy.asarray(t_am / 'm/s2', dtype=float).T
+            new_urel_x, new_urel_y = numpy.asarray(t_urel / 'm/s', dtype=float).T
+            new_arel_x, new_arel_y = numpy.asarray(t_arel / 'm/s2', dtype=float).T
+            new_p_Pa = numpy.asarray(t_p / 'Pa', dtype=float)
+            new_a0dt2_x, new_a0dt2_y = numpy.asarray(t_a0dt2 / 'm', dtype=float).T
+            new_u0_x, new_u0_y = numpy.asarray(t_u0 / 'm/s', dtype=float).T
+            new_a0dt_urel_x, new_a0dt_urel_y = numpy.asarray(t_a0dt_urel / 'm/s', dtype=float).T
+    
+            transfer_via_locate = True
+    
+            log.info(
+                f'[REMESH] field transfer via Topology.locate '
+                f'(tol={transfer_tol_m:.3e} m)'
+            )
+    
+            break
+    
+        except Exception as ex:
+            log.info(
+                f'[REMESH] Topology.locate failed with '
+                f'tol={transfer_tol_m:.3e} m: {ex}')
+            if transfer_tol_m == 1e-3*R_m:
+                bad_points = []
         
-        new_a0dt2_x, new_a0dt2_y = numpy.asarray(t_a0dt2 / 'm', dtype=float).T
-        new_u0_x, new_u0_y = numpy.asarray(t_u0 / 'm/s', dtype=float).T
-        new_a0dt_urel_x, new_a0dt_urel_y = numpy.asarray(t_a0dt_urel / 'm/s', dtype=float).T
+                for iq, xq in enumerate(new_dof_x_m):
+                    try:
+                        old_topo_fluid.locate(
+                            x_field / Length('1m'),
+                            xq[None, :],
+                            tol=transfer_tol_m,
+                            arguments=args,
+                            skip_missing=False)
+                    except Exception:
+                        bad_points.append((iq, xq))
         
-        transfer_via_locate = True
-
-        log.info('[REMESH] field transfer via Topology.locate (exact FE evaluation)')
-    except Exception as ex:
-        log.info(f'[REMESH] locate-based transfer unavailable ({ex}); '
-                 f'falling back to scattered interpolation.')
-
+                log.info(f'[LOCATE DIAGNOSTIC] failed points = {len(bad_points)}')
+        
+                for iq, xq in bad_points:
+                    dist_interface = numpy.min(
+                        numpy.linalg.norm(solid_cyl_pts_now_m - xq, axis=1))
+        
+                    log.info(
+                        f'[LOCATE DIAGNOSTIC] index={iq}, '
+                        f'x=({xq[0]:.12e}, {xq[1]:.12e}) m, '
+                        f'dist_interface={dist_interface:.6e} m')
+            
+    
+    # Hybrid fallback: exact locate everywhere possible, nearest old-fluid
+    # Gauss value only at the few points that cannot be located.
     if not transfer_via_locate:
-
-        def _I(vals):
-            return LinearNDInterpolator(old_x_m, vals, fill_value=0.0)(new_dof_x_m)
-
-        new_uf_x = _I(old_uf_ms[:, 0])
-        new_uf_y = _I(old_uf_ms[:, 1])
-
-        new_vm_x = _I(old_vm_ms[:, 0])
-        new_vm_y = _I(old_vm_ms[:, 1])
-
-        new_am_x = _I(old_am_ms2[:, 0])
-        new_am_y = _I(old_am_ms2[:, 1])
-
-        new_urel_x = _I(old_urel_ms[:, 0])
-        new_urel_y = _I(old_urel_ms[:, 1])
-
-        new_arel_x = _I(old_arel_ms2[:, 0])
-        new_arel_y = _I(old_arel_ms2[:, 1])
-
-        new_p_Pa = _I(old_p_Pa)
-
-        new_a0dt2_x = _I(old_a0dt2_m[:, 0])
-        new_a0dt2_y = _I(old_a0dt2_m[:, 1])
-
-        new_u0_x = _I(old_u0_ms[:, 0])
-        new_u0_y = _I(old_u0_ms[:, 1])
-
-        new_a0dt_urel_x = _I(old_a0dt_urel_ms[:, 0])
-        new_a0dt_urel_y = _I(old_a0dt_urel_ms[:, 1])
+    
+        bad_idx = numpy.array([iq for iq, _ in bad_points], dtype=int)
+    
+        good_mask = numpy.ones(len(new_dof_x_m), dtype=bool)
+        good_mask[bad_idx] = False
+        good_idx = numpy.flatnonzero(good_mask)
+    
+        old_good = old_topo_fluid.locate(
+            x_field / Length('1m'),
+            new_dof_x_m[good_idx],
+            tol=transfer_tol_m,
+            arguments=args,
+            skip_missing=False)
+    
+        vals = function.eval([
+            old_good.bind(v_field + urel_field),
+            old_good.bind(v_field),
+            old_good.bind(a_field),
+            old_good.bind(urel_field),
+            old_good.bind(arel_field),
+            old_good.bind(p_field),
+            old_good.bind(a0dt2_expr),
+            old_good.bind(u0_expr),
+            old_good.bind(a0dt_urel_expr),
+            old_good.bind('∇_j(uf_i)' @ ns_old_grad_fb)], arguments=args)
+    
+        N = len(new_dof_x_m)
+    
+        new_uf      = numpy.empty((N, 2))
+        new_vm      = numpy.empty((N, 2))
+        new_am      = numpy.empty((N, 2))
+        new_urel    = numpy.empty((N, 2))
+        new_arel    = numpy.empty((N, 2))
+        new_p_Pa    = numpy.empty(N)
+        new_a0dt2   = numpy.empty((N, 2))
+        new_u0      = numpy.empty((N, 2))
+        new_a0dturel = numpy.empty((N, 2))
+        new_graduf  = numpy.empty((N, 2, 2))
+    
+        new_uf[good_idx]       = numpy.asarray(vals[0] / 'm/s')
+        new_vm[good_idx]       = numpy.asarray(vals[1] / 'm/s')
+        new_am[good_idx]       = numpy.asarray(vals[2] / 'm/s2')
+        new_urel[good_idx]     = numpy.asarray(vals[3] / 'm/s')
+        new_arel[good_idx]     = numpy.asarray(vals[4] / 'm/s2')
+        new_p_Pa[good_idx]     = numpy.asarray(vals[5] / 'Pa')
+        new_a0dt2[good_idx]    = numpy.asarray(vals[6] / 'm')
+        new_u0[good_idx]       = numpy.asarray(vals[7] / 'm/s')
+        new_a0dturel[good_idx] = numpy.asarray(vals[8] / 'm/s')
+        new_graduf[good_idx]   = numpy.asarray(vals[9] / '1/s')
+    
+        from scipy.spatial import cKDTree
+        tree = cKDTree(old_x_m)
+        _, nn = tree.query(new_dof_x_m[bad_idx])
+    
+        new_uf[bad_idx]       = old_uf_ms[nn]
+        new_vm[bad_idx]       = old_vm_ms[nn]
+        new_am[bad_idx]       = old_am_ms2[nn]
+        new_urel[bad_idx]     = old_urel_ms[nn]
+        new_arel[bad_idx]     = old_arel_ms2[nn]
+        new_p_Pa[bad_idx]     = old_p_Pa[nn]
+        new_a0dt2[bad_idx]    = old_a0dt2_m[nn]
+        new_u0[bad_idx]       = old_u0_ms[nn]
+        new_a0dturel[bad_idx] = old_a0dt_urel_ms[nn]
+        new_graduf[bad_idx]   = old_graduf_s[nn]
+    
+        new_uf_x, new_uf_y = new_uf.T
+        new_vm_x, new_vm_y = new_vm.T
+        new_am_x, new_am_y = new_am.T
+        new_urel_x, new_urel_y = new_urel.T
+        new_arel_x, new_arel_y = new_arel.T
+        new_a0dt2_x, new_a0dt2_y = new_a0dt2.T
+        new_u0_x, new_u0_y = new_u0.T
+        new_a0dt_urel_x, new_a0dt_urel_y = new_a0dturel.T
+    
+        transfer_via_locate = True
+    
+        log.info(
+            f'[REMESH] hybrid transfer used: '
+            f'{len(good_idx)} exact points, {len(bad_idx)} nearest-neighbour points')
 
 
     beta, gamma, dt = dynamic.beta, dynamic.gamma, float(dynamic.timestep / 's')
@@ -1290,6 +1374,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
 
     # Interface Lagrange multiplier
     new_args['lam'] = numpy.zeros(function.arguments_for(new_res)['lam'].shape)
+    new_args['lamf'] = numpy.zeros(function.arguments_for(new_res)['lamf'].shape)
 
     # ------------------------------------------------------------------
     # Traction transfer check: old vs fresh fluid at identical interface points
