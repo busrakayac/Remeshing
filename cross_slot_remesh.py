@@ -657,6 +657,32 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     res_lamf_constraint = zipped_traction.integral(_dot2(new_ns.lamftest, new_ns.urel) * new_ns.dS)
     
     new_res += res_fluid_lamf + res_solid_lamf + res_lamf_constraint
+
+    #Construct a diagnostic fluid reaction map
+    test_unit = Pressure('1Pa') * Length('1m')
+    dtest_dimless = new_ns.dtest * test_unit
+    utest_dimless = new_ns.utest * test_unit
+
+    #Evaluate the derivatives of the solid and fluid test functions with respect to their coefficients:
+    Bd4 = function.eval(zipped_traction.bind(dtest_dimless.derivative('dtest')))
+    Bd = Bd4.reshape(Bd4.shape[0] * Bd4.shape[1], -1)
+    
+    Bu4 = function.eval(zipped_traction.bind(utest_dimless.derivative('utest')))
+    Bu = Bu4.reshape(Bu4.shape[0] * Bu4.shape[1], -1)
+
+    Bd_norm = numpy.linalg.norm(Bd, axis=0)
+    Bu_norm = numpy.linalg.norm(Bu, axis=0)
+    
+    i_d_gamma = numpy.flatnonzero(Bd_norm > 1e-12 * Bd_norm.max()) #solid interface DOFs.
+    i_u_gamma = numpy.flatnonzero(Bu_norm > 1e-12 * Bu_norm.max()) #fluid velocity interface DOFs.
+
+    # The corresponding test functions cannot necessarily be matched by simply identifying DOF indices.
+    # Instead, a least-squares transformation is calculated:
+    Tdu = numpy.linalg.lstsq(Bu[:, i_u_gamma], Bd[:, i_d_gamma], rcond=None)[0] #This transformation approximately represents the solid interface test functions using the fluid interface test functions: B_u T_du = B_d
+    #This relationship is useful for comparing interface reactions before and after remeshing.
+    trace_error = numpy.linalg.norm(Bu[:, i_u_gamma] @ Tdu - Bd[:, i_d_gamma]) / numpy.linalg.norm(Bd[:, i_d_gamma])
+    log.info(f'[FLUID REACTION MAP] trace relerror={trace_error:.6e}')
+
     # Interface target 
     d_s_remesh_coeffs = numpy.array(args['d'], copy=True)
 
@@ -773,6 +799,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
 
     R_m = float(domain.cylinder_radius / 'm')
     transfer_via_locate = False
+    batch_located_all = False
     new_graduf = None
     
     for transfer_tol_m in [1e-4*R_m, 5e-4*R_m, 1e-3*R_m]:
@@ -814,6 +841,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
             new_a0dt_urel_x, new_a0dt_urel_y = numpy.asarray(t_a0dt_urel / 'm/s', dtype=float).T
     
             transfer_via_locate = True
+            batch_located_all = True
     
             log.info(
                 f'[REMESH] field transfer via Topology.locate '
@@ -1417,7 +1445,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     # DIAGNOSTIC: physical momentum terms before vs after transfer
     # ------------------------------------------------------------------
     
-    if transfer_via_locate:
+    if batch_located_all:
     
         ns_old_mom = Namespace()
         ns_old_mom.x = x_field
@@ -1535,28 +1563,6 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
         f'projected={numpy.linalg.norm(ru_projected):.6e}'
     )
 
-    # Diagnostic only: u-correction required for momentum equilibrium
-    u_corr_solution = System(res_fluid_mom, trial='u', test='utest').solve(constrain={'u': new_ucons}, arguments=projected_args, tol=1e-12)
-    
-    corrected_args = dict(projected_args)
-    corrected_args['u'] = u_corr_solution['u']
-    
-    ru_corrected = numpy.asarray(function.eval(ru_expr, arguments=corrected_args)).reshape(-1)[free_u]
-    rp_corrected = numpy.asarray(function.eval(rp_expr, arguments=corrected_args)).reshape(-1)
-    
-    if 'p' in new_cons:
-        rp_corrected = rp_corrected[free_p]
-    
-    du_corr_g = function.eval(new_dof_sample.bind(new_ns.urel), arguments={'u': u_corr_solution['u'] - urel_proj_dofs})
-    du_corr = numpy.linalg.norm(numpy.asarray(du_corr_g / 'm/s'), axis=-1)
-    
-    log.info(
-        f'[RAW-PROJ-CORRECTED MOMENTUM] '
-        f'Ru raw={numpy.linalg.norm(ru_transfer):.6e}, '
-        f'projected={numpy.linalg.norm(ru_projected):.6e}, '
-        f'corrected={numpy.linalg.norm(ru_corrected):.6e}, '
-        f'Rp corrected={numpy.linalg.norm(rp_corrected):.6e}, '
-        f'max|du_corr|={du_corr.max():.6e} m/s')
     # ------------------------------------------------------------------
     # DIAGNOSTIC: effect of projection on each momentum term
     # ------------------------------------------------------------------
@@ -1582,7 +1588,6 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     ):
     
         r_tr = numpy.asarray(function.eval(expr.derivative('utest'), arguments=args_tr)).reshape(-1)[free_u]
-    
         r_pr = numpy.asarray(function.eval(expr.derivative('utest'), arguments=args_pr)).reshape(-1)[free_u]
     
         log.info(
@@ -1592,8 +1597,18 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
             f'delta={numpy.linalg.norm(r_pr-r_tr):.6e}'
         )
 
-    # Activate divergence-free restart
-    new_args['u']  = urel_proj_dofs
+    # Coupled fluid restart correction
+    corr_cons = {'u': new_ucons * ramp_now}
+    if 'p' in new_cons:
+        corr_cons['p'] = new_cons['p']
+    
+    up_corr_solution = System(
+        res_fluid_mom + res_fluid_inc + res_fluid_lamf + res_lamf_constraint,
+        trial=['u', 'p', 'lamf'],
+        test=['utest', 'ptest', 'lamftest']).solve(constrain=corr_cons, arguments=projected_args, tol=1e-12)
+    
+    for name in ('u', 'p', 'lamf'):
+        new_args[name] = up_corr_solution[name]
     new_args['u0'] = u0_proj
     tproj_pres, tproj_visc, tproj_tot = function.eval([fluid_traction_located.bind(ns_f.tpres), fluid_traction_located.bind(ns_f.tvisc), fluid_traction_located.bind(ns_f.traction)], arguments=new_args)
     
@@ -1646,12 +1661,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     # ------------------------------------------------------------------
     # TRANSFER CHECK: current mesh velocity
     # ------------------------------------------------------------------
-
-    if transfer_via_locate:
-        old_vm_check = numpy.asarray(function.eval(old_located.bind(v_field), arguments=args) / 'm/s')
-    else:
-        old_vm_check = numpy.column_stack((new_vm_x, new_vm_y))
-
+    old_vm_check = numpy.column_stack((new_vm_x, new_vm_y))
     new_vm_check = numpy.asarray(function.eval(new_dof_sample.bind(new_ns.vm), arguments=new_args) / 'm/s')
 
     abs_err = numpy.linalg.norm(new_vm_check - old_vm_check, axis=1)
@@ -1758,9 +1768,6 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
 
         p_field    = new_ns.p,
 
-        direct_traction_residual = res_d_traction,
-        old_direct_samequad_vector = R_old_direct_samequad_full,
-
         d_field    = new_ns.dm,
         d_name     = 'dm',
         a0dt2_key  = 'am0δt2',
@@ -1796,6 +1803,12 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
 
         fluid_am_residual   = rfluid_am_expr,
         fluid_arel_residual = rfluid_arel_expr,
+
+        reaction_Tdu = Tdu.copy(),
+        reaction_i_u_gamma = i_u_gamma.copy(),
+        reaction_i_d_gamma = i_d_gamma.copy(),
+        reaction_res_fluid_mom = res_fluid_mom,
+        reaction_res_solid_lamf = res_solid_lamf,
         
     )
 
