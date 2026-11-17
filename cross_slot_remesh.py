@@ -10,6 +10,8 @@ from pathlib import Path
 import treelog as log
 import numpy
 from scipy.interpolate import LinearNDInterpolator
+import subprocess
+import meshio
 
 def particle_shape_from_boundary(xb_m):
     pts = numpy.asarray(xb_m, dtype=float)
@@ -217,6 +219,14 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
             old_sample.bind(a0dt_urel_expr)], arguments=args)
 
     old_uf = old_v + old_urel   # physical fluid velocity u_f = v_m + u_rel
+    
+    #This gives us a valid gradient value to use if one point cannot be located.
+    ns_old_grad_fb = Namespace()
+    ns_old_grad_fb.x = x_field
+    ns_old_grad_fb.define_for('x', gradient='∇')
+    ns_old_grad_fb.uf = v_field + urel_field
+    
+    old_graduf_s = numpy.asarray(function.eval(old_sample.bind('∇_j(uf_i)' @ ns_old_grad_fb), arguments=args) / '1/s', dtype=float)
 
     old_x_m       = numpy.asarray(old_x_phys / 'm', dtype=float)
     old_uf_ms     = numpy.asarray(old_uf / 'm/s', dtype=float)
@@ -248,8 +258,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
         solid_cyl_pts_now_m,
         tol=float(domain.cylinder_radius / 'm') * 1e-4,
         arguments=args,
-        skip_missing=False,
-    )
+        skip_missing=False)
     
     ns_told = Namespace()
     ns_told.x = x_field
@@ -267,9 +276,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
             old_traction_located.bind(ns_told.tpres),
             old_traction_located.bind(ns_told.tvisc),
             old_traction_located.bind(ns_told.ttot),
-        ],
-        arguments=args,
-    )
+        ], arguments=args)
     # Old traction represented on the SOLID Gauss sample
     told_tot_solid = (solid_cyl_gauss.asfunction(numpy.asarray(told_tot / 'Pa', dtype=float)) * Pressure('1Pa'))
     res_old_direct_samequad = solid_cyl_gauss.integral(_dot2(ns.dtest, told_tot_solid) * ns.dS)
@@ -306,7 +313,6 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     solid_cyl_bez3 = solid_cyl_boundary.sample('bezier', 3)
     solid_cyl_bez3_pts_m = numpy.asarray(function.eval(solid_cyl_bez3.bind(ns.x), arguments=args) / 'm', dtype=float)
     solid_p2_edges = [solid_cyl_bez3_pts_m[solid_cyl_bez3.getindex(ielem)] for ielem in range(solid_cyl_bez3.nelems)]
-
 
     # Verify the element order actually traces a closed loop: the end point of each edge must coincide with the start point of the next, 
     # and the last must close back onto the first.  Element ordering happens to be traversing for the present topology, 
@@ -353,11 +359,129 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
 
     xb_ordered = numpy.array([e[0] for e in solid_p2_edges], dtype=float)
     geo_file   = Path(f'remesh_fluid_{current_t_s:.6f}s.geo')
-    write_fluid_remesh_geo(xb_ordered, domain, geo_file,
-                           bezier_edges=solid_p2_edges)
+    write_fluid_remesh_geo(xb_ordered, domain, geo_file, bezier_edges=solid_p2_edges)
 
     fluid_space_name = f'Xfluid{remesh_index}'
-    new_topo, new_geom_bare = gmsh(geo_file, dimension=2, order=2, space=fluid_space_name)
+    msh_file = geo_file.with_suffix('.msh')
+
+    subprocess.run(['gmsh', str(geo_file), '-2', '-order', '2','-format', 'msh2', '-o', str(msh_file)], check=True)
+
+    mesh = meshio.read(msh_file)
+    cylinder_id = int(mesh.field_data['cylinder'][0])
+
+    # The generated Gmsh mesh contains quadratic boundary elements of type line3.
+    # Each element contains three nodes, ordered by Gmsh as: [endpoint 0, endpoint 1, midpoint]
+
+    # It first verifies that the number of fluid boundary elements equals the number of solid boundary elements.
+    # Then, for every solid element, it searches for the corresponding fluid element by comparing their endpoints.
+    # Because the two meshes may have different element orientations, the code considers both possible endpoint arrangements.
+    fluid_edge_nodes = []
+    for cells, physical in zip(
+            mesh.cells, mesh.cell_data['gmsh:physical']):
+        if cells.type == 'line3':
+            fluid_edge_nodes.extend(nodes for nodes, group in zip(cells.data, physical) if group == cylinder_id)
+
+    if len(fluid_edge_nodes) != len(solid_p2_edges):
+        raise RuntimeError(
+            f'Cylinder edge count differs: fluid={len(fluid_edge_nodes)}, '
+            f'solid={len(solid_p2_edges)}')
+
+    unused = set(range(len(fluid_edge_nodes)))
+    endpoint_tol = 1e-10 * float(domain.cylinder_radius / 'm')
+
+    for solid_edge in solid_p2_edges:
+        def endpoint_error(j):
+            nodes = fluid_edge_nodes[j]
+            p0, p1 = mesh.points[nodes[:2], :2]
+            return min(
+                max(numpy.linalg.norm(p0 - solid_edge[0]), numpy.linalg.norm(p1 - solid_edge[2])),
+                max(numpy.linalg.norm(p1 - solid_edge[0]), numpy.linalg.norm(p0 - solid_edge[2])))
+
+        j = min(unused, key=endpoint_error)
+        error = endpoint_error(j)
+        if error > endpoint_tol:
+            raise RuntimeError(
+                f'Cannot match fluid edge to solid edge: '
+                f'endpoint error={error:.3e} m')
+        
+        #Correct the fluid boundary midpoint  to ensure that quadratic fluid and solid elements describe exactly the same curved boundary.
+        #Only the fluid boundary midpoint coordinates are modified. The solid mesh is not changed.
+        unused.remove(j)
+        midpoint_node = fluid_edge_nodes[j][2]
+        mesh.points[midpoint_node, :2] = solid_edge[1]
+
+    meshio.write(msh_file, mesh, file_format='gmsh22', binary=False)
+    #The corrected mesh is imported using:
+    #- `new_topo`: new fluid topology, including elements and boundary connectivity.
+    #- `new_geom_bare`: new fluid reference coordinates, stored as numerical coordinates without explicit physical units.
+    new_topo, new_geom_bare = gmsh(msh_file, space=fluid_space_name) 
+
+    # Verify the new fluid–solid interface geometry
+    #After importing the corrected mesh, the code extracts the quadratic boundary elements again.
+    #It compares every solid boundary element with its corresponding new fluid element.
+    fluid_bz3 = new_topo['fluid'].boundary['cylinder'].sample('bezier', 3)
+    fluid_pts = numpy.asarray(function.eval(fluid_bz3.bind(new_geom_bare)), dtype=float)
+    fluid_edges = [fluid_pts[fluid_bz3.getindex(i)] for i in range(fluid_bz3.nelems)]
+
+    if len(fluid_edges) != len(solid_p2_edges):
+        raise RuntimeError(
+            f'Interface edge count changed: solid={len(solid_p2_edges)}, '
+            f'fluid={len(fluid_edges)}')
+
+    unused = set(range(len(fluid_edges)))
+    endpoint_errors = []
+    midpoint_errors = []
+    worst_edge = None
+    worst_midpoint_error = -1.0
+
+    for solid_edge in solid_p2_edges:
+        def endpoint_error(j):
+            fluid_edge = fluid_edges[j]
+            forward = max(
+                numpy.linalg.norm(solid_edge[0] - fluid_edge[0]),
+                numpy.linalg.norm(solid_edge[2] - fluid_edge[2]))
+            reverse = max(
+                numpy.linalg.norm(solid_edge[0] - fluid_edge[2]),
+                numpy.linalg.norm(solid_edge[2] - fluid_edge[0]))
+            return min(forward, reverse)
+
+        j = min(unused, key=endpoint_error)
+        unused.remove(j)
+        endpoint_errors.append(endpoint_error(j))
+        midpoint_errors.append(numpy.linalg.norm(solid_edge[1] - fluid_edges[j][1]))
+
+        if midpoint_errors[-1] > worst_midpoint_error:
+            worst_midpoint_error = midpoint_errors[-1]
+            worst_edge = (len(midpoint_errors) - 1, j, solid_edge.copy(), fluid_edges[j].copy())
+
+    log.info(
+        f'[INTERFACE EDGE GEOMETRY] '
+        f'endpoint max={max(endpoint_errors):.6e} m, '
+        f'midpoint max={max(midpoint_errors):.6e} m, '
+        f'endpoint RMS={numpy.sqrt(numpy.mean(numpy.square(endpoint_errors))):.6e} m, '
+        f'midpoint RMS={numpy.sqrt(numpy.mean(numpy.square(midpoint_errors))):.6e} m')
+
+    solid_i, fluid_i, solid_edge, fluid_edge = worst_edge
+    log.info(
+        f'[WORST INTERFACE EDGE] solid edge={solid_i}, fluid edge={fluid_i}; '
+        f'solid P0={solid_edge[0]}, Pmid={solid_edge[1]}, P1={solid_edge[2]}; '
+        f'fluid P0={fluid_edge[0]}, Pmid={fluid_edge[1]}, P1={fluid_edge[2]}')
+    
+    solid_midpoint = solid_edge[1]
+    midpoint_located = new_topo['fluid'].boundary['cylinder'].locate(
+        new_geom_bare,
+        solid_midpoint[None, :],
+        tol=3e-7,
+        skip_missing=False)
+    
+    nearest_fluid_point = numpy.asarray(function.eval(midpoint_located.bind(new_geom_bare)), dtype=float)[0]
+
+    log.info(
+        f'[WORST EDGE NEAREST POINT] '
+        f'solid midpoint={solid_midpoint}, '
+        f'nearest fluid point={nearest_fluid_point}, '
+        f'distance={numpy.linalg.norm(nearest_fluid_point - solid_midpoint):.6e} m')
+    
     new_geom = new_geom_bare * Length('m')
     log.info(f'New fluid mesh generated from {geo_file} (space={fluid_space_name})')
 
@@ -466,7 +590,8 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
 
     res_fluid_mom = res_fluid_acc + res_fluid_conv + res_fluid_visc + res_fluid_pres
     new_res += res_fluid_mom
-    new_res += new_topo['fluid'].integral('ptest ∇_k(u_k) dV' @ ns_f, degree=4)
+    res_fluid_inc = new_topo['fluid'].integral('ptest ∇_k(u_k) dV' @ ns_f, degree=4)
+    new_res += res_fluid_inc
 
     # ------------------------------------------------------------------
     # FSI coupling: fluid traction acting on the solid boundary.
@@ -522,8 +647,17 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
         f'scalar P2 trace dofs={len(i_dm_gamma_scalar)}'
     )
 
-    res_d_traction = zipped_traction.integral(_dot2(new_ns.dtest, ns_f.traction) * new_ns.dS)
-    new_res += res_d_traction
+    fluid_stress_scale = fluid.viscosity * fluid.velocity / domain.cylinder_radius
+    lamf_basis = dm_basis[i_dm_gamma_scalar]
+    
+    new_ns.lamf = function.field('lamf', lamf_basis, shape=(2,)) * fluid_stress_scale
+    new_ns.lamftest = function.replace_arguments(new_ns.lamf, 'lamf:lamftest') / (fluid_stress_scale * fluid.velocity * domain.cylinder_radius)
+    
+    res_fluid_lamf = -zipped_traction.integral(_dot2(new_ns.utest, new_ns.lamf) * new_ns.dS)
+    res_solid_lamf = zipped_traction.integral(_dot2(new_ns.dtest, new_ns.lamf) * new_ns.dS)
+    res_lamf_constraint = zipped_traction.integral(_dot2(new_ns.lamftest, new_ns.urel) * new_ns.dS)
+    
+    new_res += res_fluid_lamf + res_solid_lamf + res_lamf_constraint
     # Interface target 
     d_s_remesh_coeffs = numpy.array(args['d'], copy=True)
 
@@ -572,8 +706,6 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     rfluid_visc_expr = res_fluid_visc.derivative('utest')
     rfluid_pres_expr = res_fluid_pres.derivative('utest')
     
-    
-
     # ------------------------------------------------------------------
     # 7. Rebuild constraints
     #
@@ -614,7 +746,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
 
     ns_bc.uin = fluid.velocity * (1 - (2 * new_geom[1] / domain.channel_height) ** 2)
 
-    sqr_u = (new_topo['fluid'].boundary['wall,cylinder'].integral('urel_k urel_k dSref' @ ns_bc, degree=4) / (domain.cylinder_radius * fluid.velocity ** 2))
+    sqr_u = (new_topo['fluid'].boundary['wall'].integral('urel_k urel_k dSref' @ ns_bc, degree=4) / (domain.cylinder_radius * fluid.velocity ** 2))
     sqr_u += (new_topo['fluid'].boundary['inlet1'].integral('(urel_0 - uin)^2 dSref' @ ns_bc, degree=4) / (domain.cylinder_radius * fluid.velocity ** 2))
     sqr_u += (new_topo['fluid'].boundary['inlet2'].integral('(urel_0 + uin)^2 dSref' @ ns_bc, degree=4) / (domain.cylinder_radius * fluid.velocity ** 2))
     sqr_u += (new_topo['fluid'].boundary['inlet1,inlet2'].integral('urel_1^2 dSref' @ ns_bc, degree=4) / (domain.cylinder_radius * fluid.velocity ** 2))
@@ -625,7 +757,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     # ------------------------------------------------------------------
     # 8. Build new Newton system
     # ------------------------------------------------------------------
-    new_system = System(new_res, trial=['d', 'dm', 'u', 'p', 'lam'], test=['dtest', 'dmtest', 'utest', 'ptest', 'lamtest'])
+    new_system = System(new_res, trial=['d','dm','u','p','lam','lamf'], test=['dtest','dmtest','utest','ptest','lamtest','lamftest'])
 
     # ------------------------------------------------------------------
     # 9. Transfer solution to new mesh (physical coordinates, physical velocity, full Newmark history for both d_m and u_rel)
@@ -758,8 +890,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
         ns_p.wH1 = 0.5**2
         sqr = new_dof_sample.integral(
             ('(fproj_i - ftarget_i) (fproj_i - ftarget_i) + '
-             'wH1 (∇_j(fproj_i) - gtarget_ij) (∇_j(fproj_i) - gtarget_ij)') @ ns_p
-        )
+             'wH1 (∇_j(fproj_i) - gtarget_ij) (∇_j(fproj_i) - gtarget_ij)') @ ns_p)
     
         return System(sqr, trial='fproj').solve(constrain={}, arguments={})['fproj']
 
@@ -775,8 +906,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
         hcons = System(sqr_gamma, trial='h').solve_constraints(
             droptol=1e-9,
             constrain={'h': dm_outer_cons.copy()},
-            arguments=args,
-        )
+            arguments=args)
 
         sqr_bulk = new_dof_sample.integral((((ns_h.h - ns_h.htarget) / domain.cylinder_radius)**2).sum(-1))
 
@@ -858,8 +988,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
         new_cyl_x_m,
         tol=transfer_tol_m,
         arguments=args,
-        skip_missing=False,
-    )
+        skip_missing=False)
     
     ns_old_cyl = Namespace()
     ns_old_cyl.x = x_field
@@ -880,14 +1009,12 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
         'uprojtest_i (uf_i - utarget_i) '
         '+ 0.25 wH1 '
         '(∇_j(uprojtest_i) + ∇_i(uprojtest_j)) '
-        '((∇_j(uf_i) + ∇_i(uf_j)) - (gtarget_ij + gtarget_ji))'
-    ) @ ns_proj)
+        '((∇_j(uf_i) + ∇_i(uf_j)) - (gtarget_ij + gtarget_ji))') @ ns_proj)
     
     res_proj += ns_proj.wGamma * new_cyl_sample.integral(
         '((∇_j(uprojtest_i) + ∇_i(uprojtest_j)) n_j) '
         '(((∇_k(uf_i) + ∇_i(uf_k)) n_k) '
-        '- ((gtargetcyl_ik + gtargetcyl_ki) n_k))' @ ns_proj
-    )
+        '- ((gtargetcyl_ik + gtargetcyl_ki) n_k))' @ ns_proj)
     
     res_proj += new_topo['fluid'].integral('qproj ∇_i(uprojtest_i) dV' @ ns_proj, degree=4)
     res_proj += new_topo['fluid'].integral('qprojtest ∇_i(uf_i) dV' @ ns_proj, degree=4)
@@ -938,11 +1065,9 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
 
         # Full interface trajectory ------------------------------------------
 
-        dm_plus  = _extend_mesh_state(
-            +new_ns.v * h + .5 * new_ns.a * h**2)
+        dm_plus  = _extend_mesh_state(+new_ns.v * h + .5 * new_ns.a * h**2)
 
-        dm_minus = _extend_mesh_state(
-            -new_ns.v * h + .5 * new_ns.a * h**2)
+        dm_minus = _extend_mesh_state(-new_ns.v * h + .5 * new_ns.a * h**2)
 
         V_fd = .5 * (dm_plus - dm_minus) / fac
         A_fd = (dm_plus + dm_minus) / fac**2
@@ -974,42 +1099,19 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
 
         # Velocity / acceleration FD errors ----------------------------------
 
-        dV_fd = function.eval(
-            new_dof_sample.bind(new_ns.dm / dynamic.timestep),
-            arguments={'dm': V_mesh - V_fd})
-
-        dA_fd = function.eval(
-            new_dof_sample.bind(new_ns.dm / dynamic.timestep**2),
-            arguments={'dm': A_mesh - A_fd})
-
-        dV_fd = numpy.linalg.norm(
-            numpy.asarray(dV_fd / 'm/s'), axis=-1)
-
-        dA_fd = numpy.linalg.norm(
-            numpy.asarray(dA_fd / 'm/s2'), axis=-1)
+        dV_fd = function.eval(new_dof_sample.bind(new_ns.dm / dynamic.timestep), arguments={'dm': V_mesh - V_fd})
+        dA_fd = function.eval(new_dof_sample.bind(new_ns.dm / dynamic.timestep**2), arguments={'dm': A_mesh - A_fd})
+        dV_fd = numpy.linalg.norm(numpy.asarray(dV_fd / 'm/s'), axis=-1)
+        dA_fd = numpy.linalg.norm(numpy.asarray(dA_fd / 'm/s2'), axis=-1)
 
         # Decomposition -------------------------------------------------------
 
-        dA_decomp = function.eval(
-            new_dof_sample.bind(new_ns.dm / dynamic.timestep**2),
-            arguments={'dm': A_fd - A_acc - A_geo})
-
-        Aacc_val = function.eval(
-            new_dof_sample.bind(new_ns.dm / dynamic.timestep**2),
-            arguments={'dm': A_acc})
-
-        Ageo_val = function.eval(
-            new_dof_sample.bind(new_ns.dm / dynamic.timestep**2),
-            arguments={'dm': A_geo})
-
-        dA_decomp = numpy.linalg.norm(
-            numpy.asarray(dA_decomp / 'm/s2'), axis=-1)
-
-        Aacc_val = numpy.linalg.norm(
-            numpy.asarray(Aacc_val / 'm/s2'), axis=-1)
-
-        Ageo_val = numpy.linalg.norm(
-            numpy.asarray(Ageo_val / 'm/s2'), axis=-1)
+        dA_decomp = function.eval(new_dof_sample.bind(new_ns.dm / dynamic.timestep**2), arguments={'dm': A_fd - A_acc - A_geo})
+        Aacc_val = function.eval(new_dof_sample.bind(new_ns.dm / dynamic.timestep**2), arguments={'dm': A_acc})
+        Ageo_val = function.eval(new_dof_sample.bind(new_ns.dm / dynamic.timestep**2), arguments={'dm': A_geo})
+        dA_decomp = numpy.linalg.norm(numpy.asarray(dA_decomp / 'm/s2'), axis=-1)
+        Aacc_val = numpy.linalg.norm(numpy.asarray(Aacc_val / 'm/s2'), axis=-1)
+        Ageo_val = numpy.linalg.norm(numpy.asarray(Ageo_val / 'm/s2'), axis=-1)
 
         # Logging -------------------------------------------------------------
 
@@ -1067,13 +1169,11 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
 
     log.info(
         f'[CURRENT STATE] V error = '
-        f'{numpy.linalg.norm(vm_new_dofs - V_mesh):.6e}'
-    )
+        f'{numpy.linalg.norm(vm_new_dofs - V_mesh):.6e}')
 
     log.info(
         f'[CURRENT STATE] A error = '
-        f'{numpy.linalg.norm(am_new_dofs - A_mesh):.6e}'
-    )
+        f'{numpy.linalg.norm(am_new_dofs - A_mesh):.6e}')
 
     def _project_scalar(target, scale):
         ns_p = Namespace()
@@ -1200,9 +1300,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
             fluid_traction_located.bind(ns_f.tpres),
             fluid_traction_located.bind(ns_f.tvisc),
             fluid_traction_located.bind(ns_f.traction),
-        ],
-        arguments=new_args,
-    )
+        ], arguments=new_args)
     
     old_pres = numpy.asarray(told_pres / 'Pa', dtype=float)
     old_visc = numpy.asarray(told_visc / 'Pa', dtype=float)
@@ -1287,8 +1385,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
                 f'[MOMENTUM TRANSFER] {label}: '
                 f'max={err.max():.6e} {unit}, '
                 f'RMS={rms:.6e} {unit}, '
-                f'relRMS={rms/max(ref_rms,1e-30):.6e}'
-            )
+                f'relRMS={rms/max(ref_rms,1e-30):.6e}')
     
         _compare_transfer('acc', old_acc, new_acc, 'm/s2')
         _compare_transfer('conv', old_conv, new_conv, 'm/s2')
@@ -1307,7 +1404,6 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
 
     # Size of the projection correction in physical velocity
     du_proj_g = function.eval(new_dof_sample.bind(new_ns.urel), arguments={'u': urel_proj_dofs - urel_new_dofs})
-
     du_proj = numpy.linalg.norm(numpy.asarray(du_proj_g / 'm/s'), axis=-1)
 
     # Hypothetical projected restart
@@ -1375,8 +1471,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
         f'projected={numpy.linalg.norm(ru_projected):.6e}, '
         f'corrected={numpy.linalg.norm(ru_corrected):.6e}, '
         f'Rp corrected={numpy.linalg.norm(rp_corrected):.6e}, '
-        f'max|du_corr|={du_corr.max():.6e} m/s'
-    )
+        f'max|du_corr|={du_corr.max():.6e} m/s')
     # ------------------------------------------------------------------
     # DIAGNOSTIC: effect of projection on each momentum term
     # ------------------------------------------------------------------
@@ -2082,7 +2177,7 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
             res_d_fluid_lift = function.replace_arguments(topo['fluid'].integral('(dtest_i ρf DuDt_i + ∇_j(dtest_i) σ_ij) dV' @ ns, degree=4), {'dtest': function.arguments_for(res)['dtest'] * dsolid})
             res_d_fluid_direct = topo['fluid'].boundary['cylinder'].integral('dtest_i σ_ij n_j dS' @ ns, degree=4)
 
-            res += res_d_fluid_direct
+            res += res_d_fluid_lift
 
 
         # Zero initial velocity
