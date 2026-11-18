@@ -2011,7 +2011,7 @@ class Dynamic:
     '''Parameters relating to time dependence.'''
 
     timestep: Time = Time('0.01ms') # simulation time step size
-    endtime: Time = Time('0.15s') # total duration of the simulation
+    endtime: Time = Time('0.5s') # total duration of the simulation
     init: Time = Time('.01s') # duration of the ramp-up phase
     window: Time = Time('1s') # sliding window length for time series plots
     gamma: float = .55
@@ -2326,6 +2326,36 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
     previous_t_s = 0.0
     remesh_count = 0
     # ------------------------------------------------------------------
+    # Two-stage initialization
+    # ------------------------------------------------------------------
+
+    # Original solid constraints (particle free to move)
+    free_d_constraints = cons['d'].copy()
+
+    # Additional constraints: hold the entire solid fixed
+    fixed_d_constraints = free_d_constraints.copy()
+    fixed_d_constraints[~dfluid] = 0.0
+
+    # Start with the particle fixed
+    cons['d'] = fixed_d_constraints.copy()
+
+    # Release control
+    particle_released = False
+    release_time_s = None
+
+    # Desired simulation duration AFTER particle release
+    particle_duration_s = 0.15
+
+    # Flow-development convergence settings
+    steady_tolerance = 1e-4
+    steady_checks_required = 3
+
+    steady_checks = 0
+    previous_u = None
+
+    # Evaluate convergence every 5 ms
+    steady_check_steps = max(1, round(0.005 / float(dynamic.timestep / 's')))
+    # ------------------------------------------------------------------
     # Particle position and velocity diagnostics
     # ------------------------------------------------------------------
 
@@ -2376,7 +2406,7 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
     )
 
     for istep, t in enumerate(log.iter.fraction('timestep', dynamic.times) if dynamic else [Time.wrap(float('inf'))], start=1):
-
+        moving_this_step = particle_released
         if has_remeshed and 'dm' in args:
             dm_n = args['dm']
             dm0 = args['dm0']
@@ -3053,6 +3083,50 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
 
                 log.info(f'[NEWMARK RECON CHECK] vm err={ev.max():.6e} m/s, rel={ev.max()/vref:.6e} | am err={ea.max():.6e} m/s2, rel={ea.max()/aref:.6e} | arel err={er.max():.6e} m/s2, rel={er.max()/rref:.6e}')
         # ------------------------------------------------------------
+        # Check whether the flow has developed
+        # ------------------------------------------------------------
+
+        if (
+            not particle_released
+            and current_t_s >= float(dynamic.init / 's')
+            and istep % steady_check_steps == 0
+        ):
+
+            # Current physical fluid velocity
+            u_now = numpy.asarray(function.eval(u_bz, arguments=args) / 'm/s', dtype=float)
+
+            if previous_u is not None:
+
+                relative_change = (numpy.linalg.norm(u_now - previous_u) / max(numpy.linalg.norm(u_now), 1e-30))
+
+                if relative_change < steady_tolerance:
+                    steady_checks += 1
+                else:
+                    steady_checks = 0
+
+                log.info(
+                    f'[FLOW DEVELOPMENT] '
+                    f't={current_t_s:.5f} s, '
+                    f'relative_change={relative_change:.6e}, '
+                    f'checks={steady_checks}/{steady_checks_required}'
+                )
+
+                # Release the particle when convergence is achieved
+                if steady_checks >= steady_checks_required:
+
+                    particle_released = True
+                    release_time_s = current_t_s
+
+                    # Restore the original solid constraints
+                    cons['d'] = free_d_constraints.copy()
+
+                    log.info(
+                        f'[PARTICLE RELEASED] '
+                        f't={release_time_s:.6f} s'
+                    )
+
+            previous_u = u_now.copy()
+        # ------------------------------------------------------------
         # Remeshing trigger — checked after every successful solve
         # ------------------------------------------------------------
         # Save mesh quality before any remeshing
@@ -3061,7 +3135,7 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
         # Track whether remeshing occurs at this time step
         remeshed_this_step = False
         
-        if fluid and solid and enable_remeshing:
+        if fluid and solid and enable_remeshing and moving_this_step:
             need_remesh = False
 
             # Quality-based trigger: minimum Jacobian below threshold
@@ -3214,22 +3288,27 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
         # Save CSV
         # ------------------------------------------------------------
 
-        with particle_csv.open('a') as f:
-            f.write(
-                f'{current_t_s:.12e},{istep},'
-                f'{L_particle_m:.12e},{B_particle_m:.12e},'
-                f'{deformation_index:.12e},'
-                f'{particle_center_m[0]:.12e},'
-                f'{particle_center_m[1]:.12e},'
-                f'{particle_velocity_ms[0]:.12e},'
-                f'{particle_velocity_ms[1]:.12e},'
-                f'{orientation_rad:.12e},'
-                f'{Jfluid_min_before:.12e},'
-                f'{Jfluid_min_after:.12e},'
-                f'{Jsolid_min:.12e},'
-                f'{int(remeshed_this_step)},'
-                f'{remesh_count}\n'
-            )
+        if particle_released:
+
+            particle_time_s = current_t_s - release_time_s
+            particle_step = round(particle_time_s / float(dynamic.timestep / 's'))
+
+            with particle_csv.open('a') as f:
+                f.write(
+                    f'{particle_time_s:.12e},{particle_step},'
+                    f'{L_particle_m:.12e},{B_particle_m:.12e},'
+                    f'{deformation_index:.12e},'
+                    f'{particle_center_m[0]:.12e},'
+                    f'{particle_center_m[1]:.12e},'
+                    f'{particle_velocity_ms[0]:.12e},'
+                    f'{particle_velocity_ms[1]:.12e},'
+                    f'{orientation_rad:.12e},'
+                    f'{Jfluid_min_before:.12e},'
+                    f'{Jfluid_min_after:.12e},'
+                    f'{Jsolid_min:.12e},'
+                    f'{int(remeshed_this_step)},'
+                    f'{remesh_count}\n'
+                )
         x, xb = function.eval([x_bz, x_bbz], arguments=args)
         # ------------------------------------------------------------
         # Save deformed mesh every 100 timesteps
@@ -3280,6 +3359,35 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
                 L = domain.channel_length / 'm'
                 ax.set_xlim(-L, L)
                 ax.set_ylim(-L, L)
+        # ------------------------------------------------------------
+        # Stop after the prescribed particle-motion duration
+        # ------------------------------------------------------------
+
+        if particle_released:
+
+            elapsed_particle_time = current_t_s - release_time_s
+            if elapsed_particle_time >= (particle_duration_s - 0.5 * float(dynamic.timestep / 's')):
+
+                log.info(
+                    '[PARTICLE STAGE COMPLETE] '
+                    f'Elapsed time = {elapsed_particle_time:.6f} s')
+
+                break
+        if not particle_released:
+            raise RuntimeError(
+                'The flow did not reach the steady-state tolerance '
+                'before dynamic.endtime.'
+            )
+    
+        if current_t_s - release_time_s < (
+            particle_duration_s
+            - 0.5 * float(dynamic.timestep / 's')
+        ):
+            raise RuntimeError(
+                'Insufficient simulation time after particle release. '
+                'Increase dynamic.endtime.'
+            )
+            
 
 
 if __name__ == '__main__':
