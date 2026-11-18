@@ -2454,6 +2454,25 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
         fig.colorbar(im2, ax=ax2)
 
     log.info('[INITIAL TRANSFER] Figure saved.')
+    # ------------------------------------------------------------
+    # Additional transfer diagnostics
+    # ------------------------------------------------------------
+    imax = numpy.argmax(speed)
+    log.info(
+        f'[INITIAL TRANSFER] Velocity maximum at '
+        f'x={xy[imax, 0]:.6e} m, y={xy[imax, 1]:.6e} m'
+    )
+
+    gauss = topo['fluid'].sample('gauss', 4)
+    div_g = function.eval(gauss.bind('∇_i(u_i)' @ ns), arguments=args)
+    div_g = numpy.asarray(div_g / '1/s', dtype=float)
+
+    div_scale = float((fluid.velocity / domain.cylinder_radius) / '1/s')
+    div_rms = numpy.sqrt(numpy.mean(div_g**2))
+
+    log.info(f'[INITIAL TRANSFER] Divergence RMS = {div_rms:.6e} 1/s')
+    log.info(f'[INITIAL TRANSFER] Divergence max = {numpy.abs(div_g).max():.6e} 1/s')
+    log.info(f'[INITIAL TRANSFER] Relative divergence RMS = {div_rms/div_scale:.6e}')
 
     return  # TEMPORARY: stop before FSI time integration
 
