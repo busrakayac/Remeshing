@@ -2473,6 +2473,51 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
     log.info(f'[INITIAL TRANSFER] Divergence RMS = {div_rms:.6e} 1/s')
     log.info(f'[INITIAL TRANSFER] Divergence max = {numpy.abs(div_g).max():.6e} 1/s')
     log.info(f'[INITIAL TRANSFER] Relative divergence RMS = {div_rms/div_scale:.6e}')
+    # ------------------------------------------------------------
+    # Visualize divergence of the transferred velocity field
+    # ------------------------------------------------------------
+    div_bz = numpy.asarray(
+        function.eval(fluid_bezier.bind('∇_i(u_i)' @ ns), arguments=args) / '1/s',
+        dtype=float
+    )
+
+    # Clip the color scale at the 99th percentile for visualization
+    div_lim = max(numpy.percentile(numpy.abs(div_bz), 99), 1e-12)
+
+    with export.mplfigure('fsi_initial_divergence.png', dpi=200) as fig:
+        ax = fig.add_subplot(111, xlabel='x [mm]', ylabel='y [mm]',
+                             title='Divergence of transferred velocity')
+
+        im = ax.tripcolor(*(xy * 1e3).T, fluid_bezier.tri, div_bz,
+                          shading='gouraud', cmap='RdBu_r',
+                          vmin=-div_lim, vmax=div_lim)
+
+        export.triplot(ax, xb * 1e3, hull=bbezier.tri,
+                       linewidth=1, linecolor='k')
+
+        ax.set_aspect('equal')
+        ax.set_xlim(-L * 1e3, L * 1e3)
+        ax.set_ylim(-L * 1e3, L * 1e3)
+
+        fig.colorbar(im, ax=ax, label='Divergence [1/s]')
+
+    # Location of maximum absolute divergence
+    imax = numpy.argmax(numpy.abs(div_bz))
+    log.info(f'[DIVERGENCE] Max at x={xy[imax,0]:.6e} m, y={xy[imax,1]:.6e} m')
+    log.info(f'[DIVERGENCE] Maximum absolute value = {numpy.abs(div_bz[imax]):.6e} 1/s')
+
+    # Volume-weighted RMS divergence
+    div2_int = topo['fluid'].integral('∇_i(u_i) ∇_j(u_j) dV' @ ns, degree=4)
+    area_int = topo['fluid'].integral('dV' @ ns, degree=4)
+
+    div2 = float(function.eval(div2_int, arguments=args) / 'm2/s2')
+    area = float(function.eval(area_int, arguments=args) / 'm2')
+    div_rms = numpy.sqrt(div2 / area)
+
+    U_R = float((fluid.velocity / domain.cylinder_radius) / '1/s')
+
+    log.info(f'[DIVERGENCE] Volume-weighted RMS = {div_rms:.6e} 1/s')
+    log.info(f'[DIVERGENCE] Relative volume-weighted RMS = {div_rms/U_R:.6e}')
 
     return  # TEMPORARY: stop before FSI time integration
 
