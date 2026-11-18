@@ -2168,27 +2168,24 @@ def initialize_from_background(topo, geom, domain, fluid, ucons, meshfile, dataf
         nsp.qprojtest = function.replace_arguments(nsp.qproj, 'qproj:qprojtest')
         nsp.utarget = gauss.asfunction(utarget)
     
-        res_proj = gauss.integral('uprojtest_i (uproj_i - utarget_i)' @ nsp)
-        res_proj += topo['fluid'].integral(
-            'qproj ∇_i(uprojtest_i) dV + qprojtest ∇_i(uproj_i) dV' @ nsp, degree=4
-        )
+        res_proj = gauss.integral('uprojtest_i (uproj_i - utarget_i) dV' @ nsp)
+        res_proj += topo['fluid'].integral('qproj ∇_i(uprojtest_i) dV + qprojtest ∇_i(uproj_i) dV' @ nsp, degree=4)
     
         proj_args = {
             'uproj': numpy.nan_to_num(ucons, nan=0.),
             'qproj': numpy.zeros(function.arguments_for(res_proj)['qproj'].shape)
         }
-        projected = System(
-            res_proj, trial=['uproj', 'qproj'], test=['uprojtest', 'qprojtest']
-        ).solve(constrain={'uproj': ucons.copy()}, arguments=proj_args, tol=1e-10)
+        projected = System(res_proj, trial=['uproj', 'qproj'], test=['uprojtest', 'qprojtest']).solve(constrain={'uproj': ucons.copy()}, arguments=proj_args, tol=1e-10)
     
         # L2 pressure projection
         nsp_p = Namespace()
+        nsp_p.x = geom / domain.cylinder_radius
+        nsp_p.define_for('x', jacobians=('dV', 'dS'))
+
         nsp_p.pproj = topo['fluid'].field('pproj', btype='std', degree=1)
         nsp_p.ptarget = gauss.asfunction(ptarget)
-    
-        pfit = System(
-            gauss.integral('(pproj - ptarget)^2' @ nsp_p), trial='pproj'
-        ).solve()['pproj']
+
+        pfit = System(gauss.integral('(pproj - ptarget)^2 dV' @ nsp_p), trial='pproj').solve()['pproj']
     
         return projected['uproj'], pfit
 
