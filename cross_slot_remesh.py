@@ -2364,7 +2364,7 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
 
     h_um = float(domain.elemsize / 'm') * 1e6
 
-    particle_csv = Path(f'D_h{h_um:g}um_c{domain.coarsening:g}.csv')
+    particle_csv = Path(f'D__h{h_um:g}um_c{domain.coarsening:g}.csv')
 
     particle_csv.write_text(
         'time,step,L_particle,B_particle,deformation_index,'
