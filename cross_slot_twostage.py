@@ -3346,51 +3346,39 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
             u = function.eval(u_bz, arguments=args)
             velmag = numpy.linalg.norm(u / 'm/s', axis=1)
 
-            with export.mplfigure(str('solution.jpg'), dpi=150) as fig:
+            with export.mplfigure('solution.jpg', dpi=150) as fig:
                 ax = fig.add_subplot(111, ylabel='[m]', title=f'Velocity magnitude at t={t:.3s}')
                 im = ax.tripcolor(*(x / 'm').T, fluid_bezier.tri, velmag, shading='gouraud')
 
                 fig.colorbar(im, orientation='horizontal', label='velocity [m/s]')
-
                 export.triplot(ax, xb / 'm', hull=bbezier.tri, linewidth=1)
 
                 ax.set_aspect('equal')
-
                 L = domain.channel_length / 'm'
                 ax.set_xlim(-L, L)
                 ax.set_ylim(-L, L)
+
         # ------------------------------------------------------------
         # Stop after the prescribed particle-motion duration
         # ------------------------------------------------------------
-
         if particle_released:
-
             elapsed_particle_time = current_t_s - release_time_s
-            if elapsed_particle_time >= (particle_duration_s - 0.5 * float(dynamic.timestep / 's')):
 
-                log.info(
-                    '[PARTICLE STAGE COMPLETE] '
-                    f'Elapsed time = {elapsed_particle_time:.6f} s')
-
+            if elapsed_particle_time >= particle_duration_s - 0.5 * float(dynamic.timestep / 's'):
+                log.info(f'[PARTICLE STAGE COMPLETE] Elapsed time = {elapsed_particle_time:.6f} s')
                 break
-        if not particle_released:
-            raise RuntimeError(
-                'The flow did not reach the steady-state tolerance '
-                'before dynamic.endtime.'
-            )
-    
-        if current_t_s - release_time_s < (
-            particle_duration_s
-            - 0.5 * float(dynamic.timestep / 's')
-        ):
-            raise RuntimeError(
-                'Insufficient simulation time after particle release. '
-                'Increase dynamic.endtime.'
-            )
-            
+
+    # ------------------------------------------------------------
+    # Final simulation checks
+    # ------------------------------------------------------------
+    if not particle_released:
+        raise RuntimeError('The flow did not reach the steady-state tolerance before dynamic.endtime.')
+
+    if current_t_s - release_time_s < particle_duration_s - 0.5 * float(dynamic.timestep / 's'):
+        raise RuntimeError('Insufficient simulation time after particle release. Increase dynamic.endtime.')
 
 
 if __name__ == '__main__':
-          cli.choose(main)
+    cli.choose(main)
 
 
