@@ -45,8 +45,8 @@ ns.uin = U * (1 - (2 * ns.x[1] / W)**2)
 
 # Boundary conditions: walls, opposing inlets, open outlets
 sqr = fl.boundary['wall'].integral('u_k u_k dS' @ ns, degree=4) / (R * U**2)
-sqr += fl.boundary['inlet1'].integral('(u_0 - uin)^2 + u_1^2' @ ns, degree=4) / (R * U**2)
-sqr += fl.boundary['inlet2'].integral('(u_0 + uin)^2 + u_1^2' @ ns, degree=4) / (R * U**2)
+sqr += fl.boundary['inlet1'].integral('((u_0 - uin)^2 + u_1^2) dS' @ ns, degree=4) / (R * U**2)
+sqr += fl.boundary['inlet2'].integral('((u_0 + uin)^2 + u_1^2) dS' @ ns, degree=4) / (R * U**2)
 
 cons = System(sqr, trial='u').solve_constraints(droptol=1e-9)
 
