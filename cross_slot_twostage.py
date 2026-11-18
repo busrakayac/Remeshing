@@ -2093,7 +2093,35 @@ class Dynamic:
     # need equivalents that work with arbitrary argument names.
     # ------------------------------------------------------------------
     
-    def initialize_from_background(topo, geom, domain, fluid, ucons, meshfile, datafile):
+    def newmark_defo_args_named(self, args, name, d0_name, u0dt_name, a0dt2_name):
+        'Numeric Newmark predictor step for an arbitrarily-named displacement field.'
+
+        d     = args[name]
+        d0    = args.get(d0_name, 0.)
+        u0dt  = args.get(u0dt_name, 0.)
+        a0dt2 = args.get(a0dt2_name, 0.)
+        δaδt2 = (d - d0 - u0dt - .5 * a0dt2) / self.beta
+        uδt   = u0dt + a0dt2 + self.gamma * δaδt2
+        aδt2  = a0dt2 + δaδt2
+        new_args = dict(args)
+        new_args[name]       = d + uδt + .5 * aδt2
+        new_args[d0_name]    = d
+        new_args[u0dt_name]  = uδt
+        new_args[a0dt2_name] = aδt2
+        return new_args
+
+    def newmark_defo_named(self, d, name, d0_name, u0dt_name, a0dt2_name):
+        'Symbolic Newmark velocity/acceleration for an arbitrarily-named displacement field.'
+
+        d0    = function.replace_arguments(d, [(name, d0_name)])
+        u0dt  = function.replace_arguments(d, [(name, u0dt_name)])
+        a0dt2 = function.replace_arguments(d, [(name, a0dt2_name)])
+        δaδt2 = (d - d0 - u0dt - .5 * a0dt2) / self.beta
+        uδt   = u0dt + a0dt2 + self.gamma * δaδt2
+        aδt2  = a0dt2 + δaδt2
+        return uδt / self.timestep, aδt2 / self.timestep**2
+        
+def initialize_from_background(topo, geom, domain, fluid, ucons, meshfile, datafile):
     
         data = numpy.load(datafile)
     
@@ -2164,34 +2192,6 @@ class Dynamic:
     
         return projected['uproj'], pfit
 
-
-    def newmark_defo_args_named(self, args, name, d0_name, u0dt_name, a0dt2_name):
-        'Numeric Newmark predictor step for an arbitrarily-named displacement field.'
-
-        d     = args[name]
-        d0    = args.get(d0_name, 0.)
-        u0dt  = args.get(u0dt_name, 0.)
-        a0dt2 = args.get(a0dt2_name, 0.)
-        δaδt2 = (d - d0 - u0dt - .5 * a0dt2) / self.beta
-        uδt   = u0dt + a0dt2 + self.gamma * δaδt2
-        aδt2  = a0dt2 + δaδt2
-        new_args = dict(args)
-        new_args[name]       = d + uδt + .5 * aδt2
-        new_args[d0_name]    = d
-        new_args[u0dt_name]  = uδt
-        new_args[a0dt2_name] = aδt2
-        return new_args
-
-    def newmark_defo_named(self, d, name, d0_name, u0dt_name, a0dt2_name):
-        'Symbolic Newmark velocity/acceleration for an arbitrarily-named displacement field.'
-
-        d0    = function.replace_arguments(d, [(name, d0_name)])
-        u0dt  = function.replace_arguments(d, [(name, u0dt_name)])
-        a0dt2 = function.replace_arguments(d, [(name, a0dt2_name)])
-        δaδt2 = (d - d0 - u0dt - .5 * a0dt2) / self.beta
-        uδt   = u0dt + a0dt2 + self.gamma * δaδt2
-        aδt2  = a0dt2 + δaδt2
-        return uδt / self.timestep, aδt2 / self.timestep**2
 
 
 def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Optional[Fluid] = Fluid(), dynamic: Optional[Dynamic] = Dynamic()):
@@ -2417,6 +2417,46 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
     args['a0δt2'] = numpy.zeros_like(args['d'])
 
     log.info('[FSI INITIALIZATION] Background flow transferred.')
+    
+    # ------------------------------------------------------------
+    # Check the transferred background fields
+    # ------------------------------------------------------------
+    xy = numpy.asarray(function.eval(x_bz, arguments=args) / 'm', dtype=float)
+    vel = numpy.asarray(function.eval(u_bz, arguments=args) / 'm/s', dtype=float)
+    pres = numpy.asarray(function.eval(p_bz, arguments=args) / 'Pa', dtype=float)
+    xb = numpy.asarray(function.eval(x_bbz, arguments=args) / 'm', dtype=float)
+
+    speed = numpy.linalg.norm(vel, axis=1)
+
+    # Check no-slip on the initial particle boundary
+    cyl_sample = topo['fluid'].boundary['cylinder'].sample('gauss', 4)
+    u_cyl = function.eval(cyl_sample.bind(ns.urel), arguments=args)
+    u_cyl_max = numpy.linalg.norm(numpy.asarray(u_cyl / 'm/s'), axis=1).max()
+
+    log.info(f'[INITIAL TRANSFER] Max velocity = {speed.max():.6e} m/s')
+    log.info(f'[INITIAL TRANSFER] Max particle-boundary velocity = {u_cyl_max:.6e} m/s')
+
+    with export.mplfigure('fsi_initial_transfer.png', dpi=200) as fig:
+        ax1 = fig.add_subplot(121, title='Transferred velocity [m/s]')
+        ax2 = fig.add_subplot(122, title='Transferred pressure [Pa]')
+
+        im1 = ax1.tripcolor(*xy.T, fluid_bezier.tri, speed, shading='gouraud')
+        im2 = ax2.tripcolor(*xy.T, fluid_bezier.tri, pres, shading='gouraud')
+
+        for ax in (ax1, ax2):
+            export.triplot(ax, xb, hull=bbezier.tri, linewidth=1, linecolor='k')
+            ax.set_aspect('equal')
+            L = float(domain.channel_length / 'm')
+            ax.set_xlim(-L, L)
+            ax.set_ylim(-L, L)
+
+        fig.colorbar(im1, ax=ax1)
+        fig.colorbar(im2, ax=ax2)
+
+    log.info('[INITIAL TRANSFER] Figure saved.')
+
+    return  # TEMPORARY: stop before FSI time integration
+
     # ------------------------------------------------------------------
     # Particle position and velocity diagnostics
     # ------------------------------------------------------------------
