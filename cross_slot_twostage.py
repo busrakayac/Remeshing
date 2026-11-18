@@ -1052,7 +1052,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
         
     urel_new_dofs = uf_proj_dofs - V_mesh * R_scale / (dt * u_scale)
 
-    ramp_now = .5 - .5*numpy.cos(numpy.pi*min(current_t_s / float(dynamic.init/'s'), 1.))
+    ramp_now = 1.0
     umask = numpy.isfinite(new_ucons)
     urel_new_dofs[umask] = ramp_now * new_ucons[umask]
     # ------------------------------------------------------------------
@@ -2092,6 +2092,78 @@ class Dynamic:
     # (to keep it distinct from the persistent solid field 'd'), so we
     # need equivalents that work with arbitrary argument names.
     # ------------------------------------------------------------------
+    
+    def initialize_from_background(topo, geom, domain, fluid, ucons, meshfile, datafile):
+    
+        data = numpy.load(datafile)
+    
+        params = {
+            'U': float(fluid.velocity / 'm/s'),
+            'rho': float(fluid.density / 'kg/m3'),
+            'mu': float(fluid.viscosity / 'Pa*s'),
+            'R': float(domain.cylinder_radius / 'm'),
+            'L': float(domain.channel_length / 'm'),
+            'W': float(domain.channel_height / 'm')
+        }
+        for key, value in params.items():
+            if not numpy.isclose(float(data[key]), value):
+                raise ValueError(f'Background parameter mismatch: {key}')
+    
+        bg_topo, bg_geom = gmsh(meshfile, space='Xbackground')
+        bg_fl = bg_topo['fluid']
+    
+        bg_u = bg_fl.field('u', btype='std', degree=2, shape=(2,)) * fluid.velocity
+        bg_p = bg_fl.field('p', btype='std', degree=1) * fluid.viscosity * fluid.velocity / domain.cylinder_radius
+    
+        gauss = topo['fluid'].sample('gauss', 4)
+        xy = numpy.asarray(gauss.eval(geom / Length('1m')), dtype=float)
+        located = bg_fl.locate(bg_geom, xy, tol=1e-9, skip_missing=False)
+    
+        ub, pb = function.eval(
+            [located.bind(bg_u), located.bind(bg_p)],
+            arguments={'u': data['u'], 'p': data['p']}
+        )
+    
+        U = float(fluid.velocity / 'm/s')
+        pscale = float((fluid.viscosity * fluid.velocity / domain.cylinder_radius) / 'Pa')
+        utarget = numpy.asarray(ub / 'm/s', dtype=float) / U
+        ptarget = numpy.asarray(pb / 'Pa', dtype=float) / pscale
+    
+        # Mixed velocity projection: no-slip + incompressibility
+        nsp = Namespace()
+        nsp.x = geom / domain.cylinder_radius
+        nsp.define_for('x', gradient='∇', jacobians=('dV', 'dS'))
+    
+        nsp.uproj = topo['fluid'].field('uproj', btype='std', degree=2, shape=(2,))
+        nsp.uprojtest = function.replace_arguments(nsp.uproj, 'uproj:uprojtest')
+        nsp.qproj = topo['fluid'].field('qproj', btype='std', degree=1)
+        nsp.qprojtest = function.replace_arguments(nsp.qproj, 'qproj:qprojtest')
+        nsp.utarget = gauss.asfunction(utarget)
+    
+        res_proj = gauss.integral('uprojtest_i (uproj_i - utarget_i)' @ nsp)
+        res_proj += topo['fluid'].integral(
+            'qproj ∇_i(uprojtest_i) dV + qprojtest ∇_i(uproj_i) dV' @ nsp, degree=4
+        )
+    
+        proj_args = {
+            'uproj': numpy.nan_to_num(ucons, nan=0.),
+            'qproj': numpy.zeros(function.arguments_for(res_proj)['qproj'].shape)
+        }
+        projected = System(
+            res_proj, trial=['uproj', 'qproj'], test=['uprojtest', 'qprojtest']
+        ).solve(constrain={'uproj': ucons.copy()}, arguments=proj_args, tol=1e-10)
+    
+        # L2 pressure projection
+        nsp_p = Namespace()
+        nsp_p.pproj = topo['fluid'].field('pproj', btype='std', degree=1)
+        nsp_p.ptarget = gauss.asfunction(ptarget)
+    
+        pfit = System(
+            gauss.integral('(pproj - ptarget)^2' @ nsp_p), trial='pproj'
+        ).solve()['pproj']
+    
+        return projected['uproj'], pfit
+
 
     def newmark_defo_args_named(self, args, name, d0_name, u0dt_name, a0dt2_name):
         'Numeric Newmark predictor step for an arbitrarily-named displacement field.'
@@ -2325,36 +2397,26 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
     system = System(res, trial=list(trial), test=[t+'test' for t in trial])
     previous_t_s = 0.0
     remesh_count = 0
-    # ------------------------------------------------------------------
-    # Two-stage initialization
-    # ------------------------------------------------------------------
+    # ------------------------------------------------------------
+    # Initialize FSI from the empty cross-slot background solution
+    # ------------------------------------------------------------
+    root = Path(__file__).parent
 
-    # Original solid constraints (particle free to move)
-    free_d_constraints = cons['d'].copy()
+    args['u'], args['p'] = initialize_from_background(
+        topo, geom, domain, fluid, ucons,
+        root / 'crosschannel_empty.msh',
+        root / 'crossslot_background.npz'
+    )
 
-    # Additional constraints: hold the entire solid fixed
-    fixed_d_constraints = free_d_constraints.copy()
-    fixed_d_constraints[~dfluid] = 0.0
+    # Consistent initial Newmark histories
+    args['u0'] = args['u'].copy()
+    args['a0δt'] = numpy.zeros_like(args['u'])
 
-    # Start with the particle fixed
-    cons['d'] = fixed_d_constraints.copy()
+    args['d0'] = args['d'].copy()
+    args['u0δt'] = numpy.zeros_like(args['d'])
+    args['a0δt2'] = numpy.zeros_like(args['d'])
 
-    # Release control
-    particle_released = False
-    release_time_s = None
-
-    # Desired simulation duration AFTER particle release
-    particle_duration_s = 0.15
-
-    # Flow-development convergence settings
-    steady_tolerance = 1e-4
-    steady_checks_required = 3
-
-    steady_checks = 0
-    previous_u = None
-
-    # Evaluate convergence every 5 ms
-    steady_check_steps = max(1, round(0.005 / float(dynamic.timestep / 's')))
+    log.info('[FSI INITIALIZATION] Background flow transferred.')
     # ------------------------------------------------------------------
     # Particle position and velocity diagnostics
     # ------------------------------------------------------------------
@@ -2451,7 +2513,7 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
 
             if fluid:
                 args = dynamic.newmark_velo_args(**args)
-                cons['u'] = ucons * dynamic.ramp_up(t)
+                cons['u'] = ucons
 
             # After remesh, also advance d_m via the generic named Newmark
             # helper (dm/dm0/vm0δt/am0δt2 — NOT the hardcoded d/d0/u0δt/a0δt2
@@ -3135,7 +3197,7 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
         # Track whether remeshing occurs at this time step
         remeshed_this_step = False
         
-        if fluid and solid and enable_remeshing and moving_this_step:
+        if fluid and solid and enable_remeshing:
             need_remesh = False
 
             # Quality-based trigger: minimum Jacobian below threshold
@@ -3288,28 +3350,20 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
         # Save CSV
         # ------------------------------------------------------------
 
-        if particle_released:
+        particle_time_s = current_t_s
+        particle_step = istep
 
-            particle_time_s = current_t_s - release_time_s
-            particle_step = round(particle_time_s / float(dynamic.timestep / 's'))
-
-            with particle_csv.open('a') as f:
-                f.write(
-                    f'{particle_time_s:.12e},{particle_step},'
-                    f'{L_particle_m:.12e},{B_particle_m:.12e},'
-                    f'{deformation_index:.12e},'
-                    f'{particle_center_m[0]:.12e},'
-                    f'{particle_center_m[1]:.12e},'
-                    f'{particle_velocity_ms[0]:.12e},'
-                    f'{particle_velocity_ms[1]:.12e},'
-                    f'{orientation_rad:.12e},'
-                    f'{Jfluid_min_before:.12e},'
-                    f'{Jfluid_min_after:.12e},'
-                    f'{Jsolid_min:.12e},'
-                    f'{int(remeshed_this_step)},'
-                    f'{remesh_count}\n'
-                )
-        x, xb = function.eval([x_bz, x_bbz], arguments=args)
+        with particle_csv.open('a') as f:
+            f.write(
+                f'{particle_time_s:.12e},{particle_step},'
+                f'{L_particle_m:.12e},{B_particle_m:.12e},'
+                f'{deformation_index:.12e},'
+                f'{particle_center_m[0]:.12e},{particle_center_m[1]:.12e},'
+                f'{particle_velocity_ms[0]:.12e},{particle_velocity_ms[1]:.12e},'
+                f'{orientation_rad:.12e},'
+                f'{Jfluid_min_before:.12e},{Jfluid_min_after:.12e},'
+                f'{Jsolid_min:.12e},{int(remeshed_this_step)},{remesh_count}\n'
+            )
         # ------------------------------------------------------------
         # Save deformed mesh every 100 timesteps
         # ------------------------------------------------------------
