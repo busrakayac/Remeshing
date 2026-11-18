@@ -2325,6 +2325,20 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
     system = System(res, trial=list(trial), test=[t+'test' for t in trial])
     previous_t_s = 0.0
     remesh_count = 0
+    # ------------------------------------------------------------------
+    # Particle position and velocity diagnostics
+    # ------------------------------------------------------------------
+
+    if solid:
+        particle_area_expr = topo['solid'].integral(
+            'J dVref' @ ns, degree=4)
+
+        particle_moment_expr = topo['solid'].integral(
+            'x_i J dVref' @ ns, degree=4)
+
+        if dynamic:
+            particle_velocity_moment_expr = topo['solid'].integral(
+                'v_i J dVref' @ ns, degree=4)
 
     # ------------------------------------------------------------------
     # Remeshing control
@@ -2344,8 +2358,22 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
     # Track whether we have remeshed (changes which Newmark keys exist)
     has_remeshed = False
 
-    particle_csv = Path('D_coarser.csv')
-    particle_csv.write_text('time,step,L_particle,B_particle,deformation_index\n')
+    # ------------------------------------------------------------------
+    # CSV output for mesh-independence study
+    # ------------------------------------------------------------------
+
+    h_um = float(domain.elemsize / 'm') * 1e6
+
+    particle_csv = Path(f'D_h{h_um:g}um_c{domain.coarsening:g}.csv')
+
+    particle_csv.write_text(
+        'time,step,L_particle,B_particle,deformation_index,'
+        'x_center_m,y_center_m,'
+        'vx_center_ms,vy_center_ms,'
+        'orientation_rad,'
+        'Jfluid_min_before,Jfluid_min_after,Jsolid_min,'
+        'remeshed,remesh_count\n'
+    )
 
     for istep, t in enumerate(log.iter.fraction('timestep', dynamic.times) if dynamic else [Time.wrap(float('inf'))], start=1):
 
@@ -3027,7 +3055,12 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
         # ------------------------------------------------------------
         # Remeshing trigger — checked after every successful solve
         # ------------------------------------------------------------
+        # Save mesh quality before any remeshing
+        Jfluid_min_before = float(Jf.min()) if fluid else numpy.nan
 
+        # Track whether remeshing occurs at this time step
+        remeshed_this_step = False
+        
         if fluid and solid and enable_remeshing:
             need_remesh = False
 
@@ -3119,7 +3152,7 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
 
                 # Re-evaluate Jf on the fresh mesh
                 Jf = function.eval(Jfluid_bz, arguments=args)
-
+                remeshed_this_step = True
                 # Capture new-mesh state for diagnostics using the freshly
                 # rebuilt x_bz/u_bz/p_bz (already correct on the new mesh).
                 new_x_diag  = function.eval(x_bz, arguments=args) / 'm'
@@ -3142,11 +3175,61 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
                     transfer_metrics = transfer_metrics,
                 )
 
+        # ------------------------------------------------------------
+        # Particle deformation
+        # ------------------------------------------------------------
+
         xb_current = function.eval(x_bbz, arguments=args) / 'm'
-        L_particle_m, B_particle_m, deformation_index, _ = particle_shape_from_boundary(xb_current)
+
+        L_particle_m, B_particle_m, deformation_index, orientation_rad = (particle_shape_from_boundary(xb_current))
+
+        # ------------------------------------------------------------
+        # Particle center and mean velocity
+        # ------------------------------------------------------------
+
+        if solid:
+            if dynamic:
+                moment, area, velocity_moment = function.eval([particle_moment_expr, particle_area_expr, particle_velocity_moment_expr], arguments=args)
+
+                particle_velocity_ms = numpy.asarray((velocity_moment / area) / 'm/s', dtype=float)
+
+            else:
+                moment, area = function.eval([particle_moment_expr, particle_area_expr], arguments=args)
+                particle_velocity_ms = numpy.array([numpy.nan, numpy.nan])
+
+            particle_center_m = numpy.asarray((moment / area) / 'm', dtype=float)
+
+        else:
+            particle_center_m = numpy.array([numpy.nan, numpy.nan])
+            particle_velocity_ms = numpy.array([numpy.nan, numpy.nan])
+
+        # ------------------------------------------------------------
+        # Mesh quality
+        # ------------------------------------------------------------
+
+        Jfluid_min_after = float(Jf.min()) if fluid else numpy.nan
+        Jsolid_min = float(Js.min()) if solid else numpy.nan
+
+        # ------------------------------------------------------------
+        # Save CSV
+        # ------------------------------------------------------------
 
         with particle_csv.open('a') as f:
-            f.write(f'{current_t_s:.12e},{istep},{L_particle_m:.12e},{B_particle_m:.12e},{deformation_index:.12e}\n')
+            f.write(
+                f'{current_t_s:.12e},{istep},'
+                f'{L_particle_m:.12e},{B_particle_m:.12e},'
+                f'{deformation_index:.12e},'
+                f'{particle_center_m[0]:.12e},'
+                f'{particle_center_m[1]:.12e},'
+                f'{particle_velocity_ms[0]:.12e},'
+                f'{particle_velocity_ms[1]:.12e},'
+                f'{orientation_rad:.12e},'
+                f'{Jfluid_min_before:.12e},'
+                f'{Jfluid_min_after:.12e},'
+                f'{Jsolid_min:.12e},'
+                f'{int(remeshed_this_step)},'
+                f'{remesh_count}\n'
+            )
         x, xb = function.eval([x_bz, x_bbz], arguments=args)
         # ------------------------------------------------------------
         # Save deformed mesh every 100 timesteps
