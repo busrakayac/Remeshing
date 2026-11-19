@@ -2012,7 +2012,7 @@ class Dynamic:
 
     timestep: Time = Time('0.01ms') # simulation time step size
     endtime: Time = Time('0.15s') # total duration of the simulation
-    init: Time = Time('.01s') # duration of the ramp-up phase
+    init: Time = Time('.1s') # duration of the ramp-up phase
     window: Time = Time('1s') # sliding window length for time series plots
     gamma: float = .55
     beta: float = .275625
