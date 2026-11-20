@@ -2011,7 +2011,7 @@ class Dynamic:
     '''Parameters relating to time dependence.'''
 
     timestep: Time = Time('0.001ms') # simulation time step size
-    endtime: Time = Time('0.0001s') # total duration of the simulation
+    endtime: Time = Time('0.05s') # total duration of the simulation
     init: Time = Time('.01s') # duration of the ramp-up phase
     window: Time = Time('1s') # sliding window length for time series plots
     gamma: float = .55
@@ -2543,7 +2543,7 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
     # Also allow a time-interval-based fallback trigger (set to None to disable).
     # Set to a small value for an early forced remesh to test the procedure before the mesh actually degrades. Once validated, set back to None.
 
-    remesh_interval_s  = 0.00005  # first remesh forced at t=0.0001 s for testing
+    remesh_interval_s  = None  # first remesh forced at t=0.0001 s for testing
     next_remesh_time_s = remesh_interval_s if remesh_interval_s else float('inf')
 
     # Track whether we have remeshed (changes which Newmark keys exist)
