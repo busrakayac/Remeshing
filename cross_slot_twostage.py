@@ -2011,7 +2011,7 @@ class Dynamic:
     '''Parameters relating to time dependence.'''
 
     timestep: Time = Time('0.01ms') # simulation time step size
-    endtime: Time = Time('0.5s') # total duration of the simulation
+    endtime: Time = Time('0.0001s') # total duration of the simulation
     init: Time = Time('.01s') # duration of the ramp-up phase
     window: Time = Time('1s') # sliding window length for time series plots
     gamma: float = .55
@@ -2516,8 +2516,6 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
     log.info(f'[DIVERGENCE] Volume-weighted RMS = {div_rms:.6e} 1/s')
     log.info(f'[DIVERGENCE] Relative volume-weighted RMS = {div_rms/U_R:.6e}')
 
-    return  # TEMPORARY: stop before FSI time integration
-
     # ------------------------------------------------------------------
     # Particle position and velocity diagnostics
     # ------------------------------------------------------------------
@@ -2550,6 +2548,12 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
 
     # Track whether we have remeshed (changes which Newmark keys exist)
     has_remeshed = False
+    # Background flow is already developed.
+    # Particle is free to move from t = 0.
+    
+    particle_released = True
+    release_time_s = 0.0
+    particle_duration_s = float(dynamic.endtime / 's')
 
     # ------------------------------------------------------------------
     # CSV output for mesh-independence study
