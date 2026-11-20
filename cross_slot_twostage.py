@@ -1,6 +1,6 @@
 from nutils.mesh import gmsh
 from nutils import cli, export, function
-from nutils.solver import System
+from nutils.solver import System, LinesearchNewton
 from nutils.SI import Length, Density, Viscosity, Velocity, Time, Pressure, Acceleration
 from nutils.expression_v2 import Namespace
 from collections import defaultdict, deque
@@ -2010,7 +2010,7 @@ class Fluid:
 class Dynamic:
     '''Parameters relating to time dependence.'''
 
-    timestep: Time = Time('0.01ms') # simulation time step size
+    timestep: Time = Time('0.001ms') # simulation time step size
     endtime: Time = Time('0.0001s') # total duration of the simulation
     init: Time = Time('.01s') # duration of the ramp-up phase
     window: Time = Time('1s') # sliding window length for time series plots
@@ -2822,7 +2822,7 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
                 )
 
         try:
-            args = system.solve(constrain=cons, arguments=args, tol=1e-9)
+            args = system.solve(constrain=cons, arguments=args, tol=1e-9, method=LinesearchNewton(relax0=0.2))
                         # Newton correction: solid vs mesh at the interface
             if has_remeshed and istep <= fluid_state['remesh_istep'] + 10:
 
