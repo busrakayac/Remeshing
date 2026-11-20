@@ -44,7 +44,7 @@ Plane Surface(200) = {100};
 // ======================================================
 // 2. CENTRAL SOLID DISK
 // ======================================================
-particle_y_offset = 0;
+particle_y_offset = 1e-7;
 particle_x_offset = -3*1e-4;
 Disk(300) = {particle_x_offset,particle_y_offset,0,cylinder_radius};
 
