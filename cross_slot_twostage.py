@@ -1604,7 +1604,7 @@ def remesh_fluid(current_t_s, xb_current_m, domain, ns, solid, fluid, dynamic, a
     up_corr_solution = System(
         res_fluid_mom + res_fluid_inc + res_fluid_lamf + res_lamf_constraint,
         trial=['u', 'p', 'lamf'],
-        test=['utest', 'ptest', 'lamftest']).solve(constrain=corr_cons, arguments=projected_args, tol=1e-12)
+        test=['utest', 'ptest', 'lamftest']).solve(constrain=corr_cons, arguments=projected_args, tol=1e-10)
     
     for name in ('u', 'p', 'lamf'):
         new_args[name] = up_corr_solution[name]
