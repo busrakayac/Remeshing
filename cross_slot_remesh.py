@@ -11,6 +11,7 @@ import treelog as log
 import numpy
 import subprocess
 import meshio
+import os
 
 def particle_shape_from_boundary(xb_m):
     pts = numpy.asarray(xb_m, dtype=float)
@@ -1936,7 +1937,7 @@ class Domain:
     channel_height: Length = Length('0.0004m')
     cylinder_radius: Length = Length('0.00003m')
     
-    elemsize: Length = Length('0.000012m')
+    elemsize: Length = Length(os.environ.get('MESH_SIZE', '0.000018m'))
     coarsening: float = 4.
 
     def generate_mesh(self):
