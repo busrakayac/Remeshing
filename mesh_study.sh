@@ -1,4 +1,3 @@
-
 #!/bin/bash
 #SBATCH --job-name=mesh_study
 #SBATCH --array=0-3%2
