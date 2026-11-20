@@ -2543,7 +2543,7 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
     # Also allow a time-interval-based fallback trigger (set to None to disable).
     # Set to a small value for an early forced remesh to test the procedure before the mesh actually degrades. Once validated, set back to None.
 
-    remesh_interval_s  = None  # first remesh forced at t=0.0001 s for testing
+    remesh_interval_s  = 0.00005  # first remesh forced at t=0.0001 s for testing
     next_remesh_time_s = remesh_interval_s if remesh_interval_s else float('inf')
 
     # Track whether we have remeshed (changes which Newmark keys exist)
@@ -3473,6 +3473,8 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
         # Save deformed mesh every 100 timesteps
         # ------------------------------------------------------------
         if istep % 100 == 0:
+            x = function.eval(x_bz, arguments=args)
+            xb = function.eval(x_bbz, arguments=args)
 
             if solid:
                 xs = function.eval(xsolid_bz, arguments=args)
