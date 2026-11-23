@@ -1933,11 +1933,12 @@ class Domain:
 
     The default values match Table 1 of Turek and Hron [1].'''
 
-    channel_length: Length = Length('0.0008m')
+    channel_length: Length = Length('0.005m')
     channel_height: Length = Length('0.0004m')
     cylinder_radius: Length = Length('0.00003m')
     
-    elemsize: Length = Length(os.environ.get('MESH_SIZE', '0.000018m'))
+    #elemsize: Length = Length(os.environ.get('MESH_SIZE', '0.000018m'))
+    elemsize: Length = Length('0.000012m')
     coarsening: float = 4.
 
     def generate_mesh(self):
@@ -2011,7 +2012,8 @@ class Fluid:
 class Dynamic:
     '''Parameters relating to time dependence.'''
 
-    timestep: Time = Time(os.environ.get('TIME_STEP', '0.01ms')) # simulation time step size
+    #timestep: Time = Time(os.environ.get('TIME_STEP', '0.01ms')) # simulation time step size
+    timestep: Time = Time('0.005ms') 
     endtime: Time = Time('0.15s') # total duration of the simulation
     init: Time = Time('.1s') # duration of the ramp-up phase
     window: Time = Time('1s') # sliding window length for time series plots
