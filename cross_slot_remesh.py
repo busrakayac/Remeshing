@@ -1970,7 +1970,7 @@ class Domain:
             export.triplot(ax, bezier_cylinder.eval(geom), hull=bezier_cylinder.tri, linewidth=1, linecolor='b')
 
             L = self.channel_length/u
-            ax.set_xlim(-Lin, Lin)
+            ax.set_xlim(-L, L)
             ax.set_ylim(-Lout, Lout)
             
  
@@ -3262,7 +3262,7 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
                 ax.set_aspect('equal')
 
                 L = domain.channel_length / 'm'
-                ax.set_xlim(-Lin, Lin)
+                ax.set_xlim(-L, L)
                 ax.set_ylim(-Lout, Lout)
 
         # ------------------------------------------------------------
@@ -3284,7 +3284,7 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
                 ax.set_aspect('equal')
 
                 L = domain.channel_length / 'm'
-                ax.set_xlim(-Lin, Lin)
+                ax.set_xlim(-L, L)
                 ax.set_ylim(-Lout, Lout)
 
 
