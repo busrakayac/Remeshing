@@ -1,12 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=convergence
-#SBATCH --array=0-1%2
+#SBATCH --array=0-2%3
 #SBATCH --output=output_%A_%a.txt
 #SBATCH --error=error_%A_%a.txt
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=16
-#SBATCH --time=24:00:00
+#SBATCH --time=48:00:00
 #SBATCH --mem=32G
 #SBATCH --partition=tue.default.q
 #SBATCH --no-requeue
@@ -93,12 +93,12 @@ python -c "import nutils; print(nutils.__version__)"
 
 export NUTILS_MATRIX=mkl
 
-export MKL_NUM_THREADS=$SLURM_CPUS_PER_TASK
-export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK
-export OPENBLAS_NUM_THREADS=$SLURM_CPUS_PER_TASK
-export NUMEXPR_NUM_THREADS=$SLURM_CPUS_PER_TASK
+export NUTILS_NPROCS=8
 
-export NUTILS_NPROCS=1
+export MKL_NUM_THREADS=1
+export OMP_NUM_THREADS=1
+export OPENBLAS_NUM_THREADS=1
+export NUMEXPR_NUM_THREADS=1
 
 # ======================================================
 # 7. RUN SIMULATION
