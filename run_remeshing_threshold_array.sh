@@ -44,15 +44,15 @@ GEO_SOURCE="$PROJECT_DIR/crosschannel_2.geo"
 # All other model parameters, including mesh size, timestep,
 # predictor_J_safety and remesh_interval_s, are unchanged.
 THRESHOLDS=(
+    0.40
     0.50
-    0.60
     0.70
     0.80
 )
 
 LABELS=(
+    J0p40
     J0p50
-    J0p60
     J0p70
     J0p80
 )
