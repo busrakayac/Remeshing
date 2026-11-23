@@ -62,7 +62,8 @@ def write_fluid_remesh_geo(boundary_xy_m, domain, filename, bezier_edges=None):
 
     boundary_xy_m = numpy.asarray(boundary_xy_m, dtype=float)
 
-    L = float(domain.channel_length / 'm')
+    Lin = float(domain.inlet_length / 'm')
+    Lout = float(domain.channel_length / 'm')
     W = float(domain.channel_height / 'm')
     R = float(domain.cylinder_radius / 'm')
 
@@ -1933,7 +1934,8 @@ class Domain:
 
     The default values match Table 1 of Turek and Hron [1].'''
 
-    channel_length: Length = Length('0.005m')
+    inlet_length: Length = Length('0.005m')
+    channel_length: Length = Length('0.0008m')
     channel_height: Length = Length('0.0004m')
     cylinder_radius: Length = Length('0.00003m')
     
@@ -1951,6 +1953,7 @@ class Domain:
             dimension=2,
             order=2,
             numbers={
+                 'inlet_length': self.inlet_length/u,
                  'channel_length': self.channel_length/u,
                  'channel_height': self.channel_height/u,
                  'cylinder_radius': self.cylinder_radius/u,
@@ -1967,8 +1970,8 @@ class Domain:
             export.triplot(ax, bezier_cylinder.eval(geom), hull=bezier_cylinder.tri, linewidth=1, linecolor='b')
 
             L = self.channel_length/u
-            ax.set_xlim(-L, L)
-            ax.set_ylim(-L, L)
+            ax.set_xlim(-Lin, Lin)
+            ax.set_ylim(-Lout, Lout)
             
  
         return topo, geom * u
@@ -3259,8 +3262,8 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
                 ax.set_aspect('equal')
 
                 L = domain.channel_length / 'm'
-                ax.set_xlim(-L, L)
-                ax.set_ylim(-L, L)
+                ax.set_xlim(-Lin, Lin)
+                ax.set_ylim(-Lout, Lout)
 
         # ------------------------------------------------------------
         # Save velocity plot every 100 timesteps
@@ -3281,8 +3284,8 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
                 ax.set_aspect('equal')
 
                 L = domain.channel_length / 'm'
-                ax.set_xlim(-L, L)
-                ax.set_ylim(-L, L)
+                ax.set_xlim(-Lin, Lin)
+                ax.set_ylim(-Lout, Lout)
 
 
 if __name__ == '__main__':
