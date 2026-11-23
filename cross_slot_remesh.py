@@ -84,18 +84,19 @@ def write_fluid_remesh_geo(boundary_xy_m, domain, filename, bezier_edges=None):
     
         # Outer cross-slot
         f.write(f'L = {L:.16e};\n')
+        f.write(f'Lout = {Lout:.16e};\n')
         f.write(f'W = {W:.16e};\n\n')
 
         f.write('Point(1)  = {-L,   -W/2, 0, 1.0};\n')
         f.write('Point(2)  = {-W/2, -W/2, 0, 1.0};\n')
-        f.write('Point(3)  = {-W/2, -L,   0, 1.0};\n')
-        f.write('Point(4)  = { W/2, -L,   0, 1.0};\n')
+        f.write('Point(3)  = {-W/2, -Lout,   0, 1.0};\n')
+        f.write('Point(4)  = { W/2, -Lout,   0, 1.0};\n')
         f.write('Point(5)  = { W/2, -W/2, 0, 1.0};\n')
         f.write('Point(6)  = { L,   -W/2, 0, 1.0};\n')
         f.write('Point(7)  = { L,    W/2, 0, 1.0};\n')
         f.write('Point(8)  = { W/2,  W/2, 0, 1.0};\n')
-        f.write('Point(9)  = { W/2,  L,   0, 1.0};\n')
-        f.write('Point(10) = {-W/2,  L,   0, 1.0};\n')
+        f.write('Point(9)  = { W/2,  Lout,   0, 1.0};\n')
+        f.write('Point(10) = {-W/2,  Lout,   0, 1.0};\n')
         f.write('Point(11) = {-W/2,  W/2, 0, 1.0};\n')
         f.write('Point(12) = {-L,    W/2, 0, 1.0};\n\n')
 
@@ -1856,7 +1857,8 @@ def remesh_diagnostics(
     """
 
     from scipy.spatial import cKDTree
-    L_plot = float(domain.channel_length / 'm')
+    L_plot = float(domain.inlet_length / 'm')
+    Lout_plot = float(domain.channel_length / 'm')
 
 
     # ------------------------------------------------------------------
@@ -1883,7 +1885,7 @@ def remesh_diagnostics(
         ax1.plot(closed[:, 0], closed[:, 1], 'r-', linewidth=1.5, label='solid boundary')
         ax1.set_aspect('equal')
         ax1.set_xlim(-L_plot, L_plot)
-        ax1.set_ylim(-L_plot, L_plot)
+        ax1.set_ylim(-Lout_plot, Lout_plot)
         ax1.legend(fontsize=6)
 
         ax2 = fig.add_subplot(122, title=f'New fluid mesh after remesh\nJf_min={Jf_new.min():.3f}')
@@ -1891,7 +1893,7 @@ def remesh_diagnostics(
         ax2.plot(closed[:, 0], closed[:, 1], 'r-', linewidth=1.5, label='solid boundary')
         ax2.set_aspect('equal')
         ax2.set_xlim(-L_plot, L_plot)
-        ax2.set_ylim(-L_plot, L_plot)
+        ax2.set_ylim(-Lout_plot, Lout_plot)
         ax2.legend(fontsize=6)
 
         fig.suptitle(f'Remesh #{remesh_count}  t={current_t_s:.4e} s', fontsize=9)
@@ -1912,7 +1914,7 @@ def remesh_diagnostics(
         ax1.plot(closed[:, 0], closed[:, 1], 'w-', linewidth=1)
         ax1.set_aspect('equal')
         ax1.set_xlim(-L_plot, L_plot)
-        ax1.set_ylim(-L_plot, L_plot)
+        ax1.set_ylim(-Lout_plot, Lout_plot)
 
         ax2 = fig.add_subplot(122, title='|u| after remesh  [m/s]')
         im2 = ax2.tripcolor(
@@ -1922,7 +1924,7 @@ def remesh_diagnostics(
         ax2.plot(closed[:, 0], closed[:, 1], 'w-', linewidth=1)
         ax2.set_aspect('equal')
         ax2.set_xlim(-L_plot, L_plot)
-        ax2.set_ylim(-L_plot, L_plot)
+        ax2.set_ylim(-Lout_plot, Lout_plot)
 
         fig.colorbar(im2, ax=[ax1, ax2], orientation='horizontal', label='|u| [m/s]', shrink=0.6)
         fig.suptitle(f'Remesh #{remesh_count}  t={current_t_s:.4e} s', fontsize=9)
@@ -1969,7 +1971,9 @@ class Domain:
             export.triplot(ax, bezier.eval(geom), hull=bezier.hull)
             export.triplot(ax, bezier_cylinder.eval(geom), hull=bezier_cylinder.tri, linewidth=1, linecolor='b')
 
-            L = self.channel_length/u
+            L = self.inlet_length / u
+            Lout = self.channel_length / u
+            
             ax.set_xlim(-L, L)
             ax.set_ylim(-Lout, Lout)
             
@@ -3261,7 +3265,9 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
 
                 ax.set_aspect('equal')
 
-                L = domain.channel_length / 'm'
+                L = float(domain.inlet_length / 'm')
+                Lout = float(domain.channel_length / 'm')
+                
                 ax.set_xlim(-L, L)
                 ax.set_ylim(-Lout, Lout)
 
@@ -3283,7 +3289,9 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
 
                 ax.set_aspect('equal')
 
-                L = domain.channel_length / 'm'
+                L = float(domain.inlet_length / 'm')
+                Lout = float(domain.channel_length / 'm')
+                
                 ax.set_xlim(-L, L)
                 ax.set_ylim(-Lout, Lout)
 
