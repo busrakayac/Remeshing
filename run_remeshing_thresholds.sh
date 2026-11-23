@@ -6,7 +6,8 @@
 #
 # Slurm, one independent job per threshold:
 #   sbatch --array=0-3 --time=04:00:00 --mem=16G run_remeshing_thresholds.sh /path/to/cross_slot_remesh.py
-# Adapt --time/--mem and your Python environment to your cluster.
+# Adapt --time/--mem to your cluster.  The TU Delft Umbrella Python
+# environment and ~/myenv are activated automatically for actual runs.
 #
 # Smoke test (generate source snapshots, do NOT run FSI):
 #   PREPARE_ONLY=1 bash run_remeshing_thresholds.sh /path/to/cross_slot_remesh.py
@@ -20,8 +21,45 @@
 set -Eeuo pipefail
 
 THRESHOLDS=(0.50 0.60 0.70 0.80)
-PYTHON_EXE="${PYTHON_EXE:-python}"
 PREPARE_ONLY="${PREPARE_ONLY:-0}"
+
+# Use the SAME Python environment as the successful cross-slot FSI jobs.
+# Skip cluster modules for PREPARE_ONLY, so source generation can be tested
+# without Nutils or the Slurm/Umbrella environment.
+setup_python() {
+    if [[ "$PREPARE_ONLY" == "1" ]]; then
+        PYTHON_EXE="${PYTHON_EXE:-python}"
+        return
+    fi
+
+    if ! type module >/dev/null 2>&1; then
+        echo "ERROR: 'module' command is unavailable. Run this on the TU Delft cluster." >&2
+        exit 1
+    fi
+
+    module purge
+    module load Umbrella/2024
+    module load Python/3.10.13-GCCcore-11.3.0
+    module load imkl/2025.1.0
+    module load libGLU/9.0.2-GCCcore-11.3.0
+
+    [[ -f "$HOME/myenv/bin/activate" ]] || {
+        echo "ERROR: Missing $HOME/myenv/bin/activate" >&2
+        exit 1
+    }
+    # shellcheck disable=SC1091
+    source "$HOME/myenv/bin/activate"
+
+    # Respect an explicit override, otherwise lock to the activated venv.
+    PYTHON_EXE="${PYTHON_EXE:-$(command -v python)}"
+    echo "Using Python: $PYTHON_EXE"
+    "$PYTHON_EXE" -c 'from nutils.mesh import gmsh; import nutils; print("Nutils:", nutils.__version__)' || {
+        echo "ERROR: Nutils import failed. Check ~/myenv or PYTHON_EXE." >&2
+        exit 1
+    }
+}
+
+setup_python
 
 # Source file defaults to the cross_slot_remesh.py beside this shell script.
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -84,7 +122,13 @@ PY
     (
         cd -- "$run_dir"
         # Keep the log from each run; failures propagate through the pipe.
-        "$PYTHON_EXE" -u "$model_copy" 2>&1 | tee simulation.log
+        # Nutils uses cli.choose(main), so explicitly select the 'main' entry.
+        # Slurm srun matches the existing successful FSI submission pattern.
+        if [[ -n "${SLURM_JOB_ID:-}" ]]; then
+            srun "$PYTHON_EXE" -u "$model_copy" main 2>&1 | tee simulation.log
+        else
+            "$PYTHON_EXE" -u "$model_copy" main 2>&1 | tee simulation.log
+        fi
     )
 
     # CSV filenames are unmodified inside Python but unique by run directory.
