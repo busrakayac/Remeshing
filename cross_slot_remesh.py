@@ -62,7 +62,7 @@ def write_fluid_remesh_geo(boundary_xy_m, domain, filename, bezier_edges=None):
 
     boundary_xy_m = numpy.asarray(boundary_xy_m, dtype=float)
 
-    Lin = float(domain.inlet_length / 'm')
+    L = float(domain.inlet_length / 'm')
     Lout = float(domain.channel_length / 'm')
     W = float(domain.channel_height / 'm')
     R = float(domain.cylinder_radius / 'm')
