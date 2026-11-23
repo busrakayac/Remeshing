@@ -6,19 +6,20 @@ SetFactory("OpenCASCADE");
 // ======================================================
 
 L = channel_length;
+Lout = outlet_length;
 W = channel_height;
 
 // Outer boundary points
 Point(1) = {-L, -W/2, 0, elemsize};
 Point(2) = {-W/2, -W/2, 0, elemsize};
-Point(3) = {-W/2, -L, 0, elemsize};
-Point(4) = { W/2, -L, 0, elemsize};
+Point(3)  = {-W/2, -Lout, 0, elemsize};
+Point(4)  = { W/2, -Lout, 0, elemsize};
 Point(5) = { W/2, -W/2, 0, elemsize};
 Point(6) = { L, -W/2, 0, elemsize};
 Point(7) = { L, W/2, 0, elemsize};
 Point(8) = { W/2, W/2, 0, elemsize};
-Point(9) = { W/2, L, 0, elemsize};
-Point(10) = {-W/2, L, 0, elemsize};
+Point(9)  = { W/2,  Lout, 0, elemsize};
+Point(10) = {-W/2,  Lout, 0, elemsize};
 Point(11) = {-W/2, W/2, 0, elemsize};
 Point(12) = {-L, W/2, 0, elemsize};
 Point(13) = {0, 0.0001, 0, 1.0};
