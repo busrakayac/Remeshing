@@ -2011,7 +2011,7 @@ class Fluid:
 class Dynamic:
     '''Parameters relating to time dependence.'''
 
-    timestep: Time = Time('0.01ms') # simulation time step size
+    timestep: Time = Time(os.environ.get('TIME_STEP', '0.01ms')) # simulation time step size
     endtime: Time = Time('0.15s') # total duration of the simulation
     init: Time = Time('.1s') # duration of the ramp-up phase
     window: Time = Time('1s') # sliding window length for time series plots
