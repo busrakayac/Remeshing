@@ -5,8 +5,8 @@ SetFactory("OpenCASCADE");
 // 1. CROSS GEOMETRY
 // ======================================================
 
-L = channel_length;
-Lout = outlet_length;
+L = inlet_length;
+Lout = channel_length;
 W = channel_height;
 
 // Outer boundary points
