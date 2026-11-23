@@ -3237,7 +3237,7 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
         # ------------------------------------------------------------
         # Save deformed mesh every 100 timesteps
         # ------------------------------------------------------------
-        if istep % 100 == 0:
+        if istep % 500 == 0:
 
             if solid:
                 xs = function.eval(xsolid_bz, arguments=args)
@@ -3265,7 +3265,7 @@ def main(domain: Domain = Domain(), solid: Optional[Solid] = Solid(), fluid: Opt
         # ------------------------------------------------------------
         # Save velocity plot every 100 timesteps
         # ------------------------------------------------------------
-        if fluid and istep % 100 == 0:
+        if fluid and istep % 200 == 0:
 
             u = function.eval(u_bz, arguments=args)
             velmag = numpy.linalg.norm(u / 'm/s', axis=1)
