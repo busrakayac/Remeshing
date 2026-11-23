@@ -95,9 +95,9 @@ If (Abs(xc + L) < tol)
 inlet1() += { bnd_fluid(i) };
 ElseIf (Abs(xc - L) < tol)
 inlet2() += { bnd_fluid(i) };
-ElseIf (Abs(yc + L) < tol)
+ElseIf (Abs(yc + Lout) < tol)
 outlet1() += { bnd_fluid(i) };
-ElseIf (Abs(yc - L) < tol)
+ElseIf (Abs(yc - Lout) < tol)
 outlet2() += { bnd_fluid(i) };
 Else
 wall() += { bnd_fluid(i) };
