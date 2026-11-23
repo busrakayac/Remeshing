@@ -1936,7 +1936,7 @@ class Domain:
 
     The default values match Table 1 of Turek and Hron [1].'''
 
-    inlet_length: Length = Length('0.005m')
+    inlet_length: Length = Length('0.0008m')
     channel_length: Length = Length('0.0008m')
     channel_height: Length = Length('0.0004m')
     cylinder_radius: Length = Length('0.00003m')
